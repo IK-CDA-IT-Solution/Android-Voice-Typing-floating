@@ -570,14 +570,15 @@ class FloatingBubbleService : Service() {
     }
 
     private fun handleBubbleTap() {
-        val currentState = speechEngine.speechState.value
-        if (currentState is BubbleState.Idle) {
-            startListeningSession()
-        } else if (currentState is BubbleState.Listening) {
-            speechEngine.stopSession()
-        } else {
-            // Taps in non-IDLE states are ignored
-            Log.d(TAG, "Tap ignored during state: $currentState")
+        when (val currentState = speechEngine.speechState.value) {
+            is BubbleState.Idle -> startListeningSession()
+            is BubbleState.Listening -> speechEngine.stopSession()
+            is BubbleState.Error, is BubbleState.Done -> {
+                // A new tap should recover immediately after an error or previous result.
+                speechEngine.stateMachine.resetToIdle()
+                startListeningSession()
+            }
+            else -> Log.d(TAG, "Tap ignored while recognition is active: $currentState")
         }
     }
 
@@ -596,6 +597,8 @@ class FloatingBubbleService : Service() {
 
     private fun startListeningSession() {
         cancelAutoDismiss()
+        copiedBadge?.visibility = View.GONE
+        previewPill?.visibility = View.GONE
         speechEngine.startSession(
             languageCode = appPreferences.selectedLanguage.value,
             playTone = appPreferences.soundFeedback.value,
@@ -669,7 +672,10 @@ class FloatingBubbleService : Service() {
             delay(2500L)
             mainHandler.post {
                 copiedBadge?.visibility = View.GONE
-                speechEngine.stateMachine.resetToIdle()
+                // Do not reset a newer session that the user started while the badge was visible.
+                if (speechEngine.speechState.value is BubbleState.Done) {
+                    speechEngine.stateMachine.resetToIdle()
+                }
                 scheduleAutoDismiss()
             }
         }
