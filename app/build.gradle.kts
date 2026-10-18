@@ -42,24 +42,31 @@ android {
         !envKeyPassword.isNullOrBlank() &&
         file(envKeystorePath).exists()
 
-    create("release") {
-      if (hasReleaseKeystore) {
+    val rootDebugKeystore = file("${rootDir}/debug.keystore")
+
+    if (hasReleaseKeystore) {
+      create("release") {
         storeFile = file(envKeystorePath!!)
         storePassword = envKeystorePassword
         keyAlias = envKeyAlias
         keyPassword = envKeyPassword
-      } else {
-        storeFile = file("${rootDir}/debug.keystore")
+      }
+    } else if (rootDebugKeystore.exists()) {
+      create("release") {
+        storeFile = rootDebugKeystore
         storePassword = "android"
         keyAlias = "androiddebugkey"
         keyPassword = "android"
       }
     }
-    create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+
+    if (rootDebugKeystore.exists()) {
+      create("debugConfig") {
+        storeFile = rootDebugKeystore
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      }
     }
   }
 
@@ -68,9 +75,21 @@ android {
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("release")
+      val hasReleaseConfig = signingConfigs.findByName("release") != null
+      signingConfig = if (hasReleaseConfig) {
+        signingConfigs.getByName("release")
+      } else {
+        signingConfigs.getByName("debug")
+      }
     }
-    debug { signingConfig = signingConfigs.getByName("debugConfig") }
+    debug {
+      val hasCustomDebug = signingConfigs.findByName("debugConfig") != null
+      signingConfig = if (hasCustomDebug) {
+        signingConfigs.getByName("debugConfig")
+      } else {
+        signingConfigs.getByName("debug")
+      }
+    }
   }
 
   compileOptions {
