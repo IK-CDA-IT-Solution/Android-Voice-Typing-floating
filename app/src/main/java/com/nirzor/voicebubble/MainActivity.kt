@@ -14,6 +14,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,6 +27,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.History
@@ -330,26 +333,43 @@ fun MainAppContent(
                     }
                 },
                 actions = {
-                    // Quick Status Pill
+                    // Quick Status Interactive Toggle Button
                     Surface(
                         shape = CircleShape,
-                        color = if (isServiceRunning) Color(0xFF10B981).copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.padding(end = 12.dp)
+                        color = if (isServiceRunning) Color(0xFF10B981).copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
+                        border = BorderStroke(1.dp, if (isServiceRunning) Color(0xFF10B981) else MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier
+                            .padding(end = 12.dp)
+                            .clickable {
+                                if (isServiceRunning) {
+                                    FloatingBubbleService.stop(context)
+                                } else {
+                                    if (!hasOverlayPermission) {
+                                        Toast.makeText(context, R.string.perm_required_alert, Toast.LENGTH_LONG).show()
+                                        onRequestOverlayPermission()
+                                    } else if (!hasMicPermission) {
+                                        Toast.makeText(context, R.string.perm_required_alert, Toast.LENGTH_LONG).show()
+                                        micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    } else {
+                                        FloatingBubbleService.start(context)
+                                    }
+                                }
+                            }
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
                                 imageVector = Icons.Default.FiberManualRecord,
                                 contentDescription = null,
-                                tint = if (isServiceRunning) Color(0xFF10B981) else MaterialTheme.colorScheme.outline,
-                                modifier = Modifier.size(8.dp)
+                                tint = if (isServiceRunning) Color(0xFF10B981) else MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(10.dp)
                             )
-                            Spacer(modifier = Modifier.width(5.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = if (isServiceRunning) stringResource(R.string.header_active) else stringResource(R.string.header_inactive),
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = if (isServiceRunning) Color(0xFF047857) else MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -373,9 +393,8 @@ fun MainAppContent(
                         onClick = {
                             if (currentRoute != screen.route) {
                                 navController.navigate(screen.route) {
-                                    popUpTo(Screen.HOME.route) { saveState = true }
+                                    popUpTo(navController.graph.findStartDestination().id)
                                     launchSingleTop = true
-                                    restoreState = true
                                 }
                             }
                         },

@@ -6,7 +6,7 @@
     <string name="nav_home">হোম</string>
     <string name="nav_history">ইতিহাস</string>
     <string name="nav_settings">সেটিংস</string>
-    <string name="header_active">ACTIVE</string>
+    <string name="header_active">ON</string>
     <string name="header_inactive">OFF</string>
     <string name="header_bubble_status">Floating Voice Bubble</string>
     <string name="bubble_status_active">স্ক্রিনে ভাসমান বাবল সক্রিয়</string>
