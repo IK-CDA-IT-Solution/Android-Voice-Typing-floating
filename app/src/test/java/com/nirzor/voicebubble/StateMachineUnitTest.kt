@@ -56,6 +56,22 @@ class StateMachineUnitTest {
     }
 
     @Test
+    fun testRetryRestoresListeningStateAfterProcessing() {
+        stateMachine.startListening()
+        assertTrue(stateMachine.moveToProcessing())
+
+        assertTrue(stateMachine.restartListening())
+        assertTrue(stateMachine.state.value is BubbleState.Listening)
+        assertFalse(stateMachine.canAcceptTap())
+    }
+
+    @Test
+    fun testRetryDoesNotStartFromIdle() {
+        assertFalse(stateMachine.restartListening())
+        assertEquals(BubbleState.Idle, stateMachine.state.value)
+    }
+
+    @Test
     fun testProcessingToDoneTransition() {
         stateMachine.startListening()
         stateMachine.moveToProcessing()
