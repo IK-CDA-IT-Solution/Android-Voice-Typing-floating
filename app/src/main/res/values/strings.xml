@@ -146,7 +146,7 @@
     <string name="settings_retention_never">কখনো মুছবে না (Never)</string>
 
     <!-- Gemini AI Security & Key Section -->
-    <string name="settings_gemini_section">Gemini 2.5 Flash AI পলিশিং ও সিকিউরিটি</string>
+    <string name="settings_gemini_section">Gemini 3.8 Flash AI পলিশিং ও সিকিউরিটি</string>
     <string name="settings_gemini_enable_title">Gemini AI পরিমার্জন ও প্যারাফ্রেজ</string>
     <string name="settings_gemini_enable_desc">কথ্য বাংলার ফিলার শব্দ ও ব্যাকরণগত ত্রুটি সংশোধন করে নিখুঁত টেক্সট তৈরি করবে</string>
     <string name="gemini_key_label">Gemini API Key</string>
