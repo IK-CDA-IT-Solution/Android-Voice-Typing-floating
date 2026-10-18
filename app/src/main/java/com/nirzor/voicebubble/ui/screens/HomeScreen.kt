@@ -460,6 +460,12 @@ fun HomeScreen(
 
                                             val finalText = (polished ?: rawResult).trim()
                                             inAppTranscription = finalText
+                                            // Mark the in-app recognizer as complete so the next tap can start a new session.
+                                            testSpeechEngine.stateMachine.moveToDone(
+                                                rawResult,
+                                                polished,
+                                                prefs.autoCopy.value && finalText.isNotBlank()
+                                            )
 
                                             if (finalText.isNotBlank()) {
                                                 UndoRedoManager.recordInput(context, finalText)
