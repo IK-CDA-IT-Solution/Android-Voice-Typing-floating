@@ -1,7 +1,9 @@
 package com.nirzor.voicebubble.speech
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Build
@@ -19,9 +21,11 @@ import com.nirzor.voicebubble.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import androidx.core.content.ContextCompat
 import java.util.Locale
 
 class SpeechEngine(private val context: Context) {
@@ -36,6 +40,7 @@ class SpeechEngine(private val context: Context) {
     private var speechRecognizer: SpeechRecognizer? = null
     private var startTimeMs: Long = 0L
     private var hasRetriedBusy = false
+    private var hasRetriedOnDevice = false
     private var toneGenerator: ToneGenerator? = null
     private var vibrator: Vibrator? = null
 
@@ -56,7 +61,21 @@ class SpeechEngine(private val context: Context) {
     }
 
     fun isRecognitionAvailable(): Boolean {
-        return SpeechRecognizer.isRecognitionAvailable(context)
+        return SpeechRecognizer.isRecognitionAvailable(context) || isOnDeviceRecognitionAvailable()
+    }
+
+    private fun isOnDeviceRecognitionAvailable(): Boolean {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+    }
+
+    private fun scheduleErrorReset() {
+        scope.launch {
+            delay(2500L)
+            if (stateMachine.state.value is BubbleState.Error) {
+                stateMachine.resetToIdle()
+            }
+        }
     }
 
     fun startSession(
@@ -67,8 +86,24 @@ class SpeechEngine(private val context: Context) {
         onFinalResult: ((rawText: String, lang: String, durationMs: Long) -> Unit)? = null,
         onErrorOccurred: ((errorMessage: String, errorCode: Int) -> Unit)? = null
     ) {
+        // Let users retry immediately after a terminal error or completed result.
+        when (stateMachine.state.value) {
+            is BubbleState.Error, is BubbleState.Done -> stateMachine.resetToIdle()
+            else -> Unit
+        }
+
         if (!stateMachine.canAcceptTap()) {
-            Log.d(TAG, "Taps ignored while not in IDLE state")
+            Log.d(TAG, "Taps ignored while recognition is still active")
+            return
+        }
+
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            val errorMsg = context.getString(R.string.speech_err_permissions)
+            stateMachine.moveToError(errorMsg, SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS)
+            onErrorOccurred?.invoke(errorMsg, SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS)
+            scheduleErrorReset()
             return
         }
 
@@ -76,10 +111,12 @@ class SpeechEngine(private val context: Context) {
             val errorMsg = context.getString(R.string.speech_not_available)
             stateMachine.moveToError(errorMsg, -1)
             onErrorOccurred?.invoke(errorMsg, -1)
+            scheduleErrorReset()
             return
         }
 
         hasRetriedBusy = false
+        hasRetriedOnDevice = false
 
         // Cancel & destroy old recognizer on main looper, wait ~300ms, then launch new session
         cleanupRecognizer()
@@ -92,7 +129,9 @@ class SpeechEngine(private val context: Context) {
                 enableHaptic = enableHaptic,
                 onPartialResult = onPartialResult,
                 onFinalResult = onFinalResult,
-                onErrorOccurred = onErrorOccurred
+                onErrorOccurred = onErrorOccurred,
+                isRetry = false,
+                forceOnDevice = false
             )
         }
     }
@@ -103,10 +142,13 @@ class SpeechEngine(private val context: Context) {
         enableHaptic: Boolean,
         onPartialResult: ((String) -> Unit)?,
         onFinalResult: ((rawText: String, lang: String, durationMs: Long) -> Unit)?,
-        onErrorOccurred: ((errorMessage: String, errorCode: Int) -> Unit)?
+        onErrorOccurred: ((errorMessage: String, errorCode: Int) -> Unit)?,
+        isRetry: Boolean,
+        forceOnDevice: Boolean
     ) {
         mainHandler.post {
-            if (!stateMachine.startListening()) {
+            // Retry paths must retain the active Listening state; startListening() accepts IDLE only.
+            if (!isRetry && !stateMachine.startListening()) {
                 return@post
             }
 
@@ -122,15 +164,25 @@ class SpeechEngine(private val context: Context) {
 
                 if (languageCode != "default") {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageCode)
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, languageCode)
-                    putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, languageCode)
                 } else {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+                }
+                if (forceOnDevice) {
+                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
                 }
             }
 
             try {
-                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
+                val recognizer = if (forceOnDevice) {
+                    if (!isOnDeviceRecognitionAvailable()) {
+                        throw IllegalStateException("On-device speech recognition is unavailable")
+                    }
+                    SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+                } else {
+                    SpeechRecognizer.createSpeechRecognizer(context)
+                }
+
+                speechRecognizer = recognizer.apply {
                     setRecognitionListener(object : RecognitionListener {
                         override fun onReadyForSpeech(params: Bundle?) {
                             Log.d(TAG, "SpeechRecognizer onReadyForSpeech")
@@ -160,19 +212,51 @@ class SpeechEngine(private val context: Context) {
                                 hasRetriedBusy = true
                                 cleanupRecognizer()
                                 scope.launch {
-                                    delay(300L)
+                                    delay(400L)
                                     internalStartRecognizer(
                                         languageCode, playTone, enableHaptic,
-                                        onPartialResult, onFinalResult, onErrorOccurred
+                                        onPartialResult, onFinalResult, onErrorOccurred,
+                                        isRetry = true,
+                                        forceOnDevice = forceOnDevice
                                     )
                                 }
                                 return
                             }
 
-                            val errorMsg = getErrorMessage(error)
+                            val isNetworkFailure =
+                                error == SpeechRecognizer.ERROR_NETWORK ||
+                                    error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT ||
+                                    error == SpeechRecognizer.ERROR_SERVER
+                            if (
+                                !forceOnDevice &&
+                                !hasRetriedOnDevice &&
+                                isNetworkFailure &&
+                                isOnDeviceRecognitionAvailable()
+                            ) {
+                                hasRetriedOnDevice = true
+                                Log.w(TAG, "Network speech recognition failed; retrying with on-device recognizer")
+                                cleanupRecognizer()
+                                scope.launch {
+                                    delay(350L)
+                                    internalStartRecognizer(
+                                        languageCode, playTone, enableHaptic,
+                                        onPartialResult, onFinalResult, onErrorOccurred,
+                                        isRetry = true,
+                                        forceOnDevice = true
+                                    )
+                                }
+                                return
+                            }
+
+                            val errorMsg = if (forceOnDevice && isNetworkFailure) {
+                                context.getString(R.string.speech_err_offline_unavailable)
+                            } else {
+                                getErrorMessage(error)
+                            }
                             stateMachine.moveToError(errorMsg, error)
                             if (enableHaptic) triggerHapticDouble()
                             onErrorOccurred?.invoke(errorMsg, error)
+                            scheduleErrorReset()
                         }
 
                         override fun onResults(results: Bundle?) {
@@ -188,6 +272,7 @@ class SpeechEngine(private val context: Context) {
                                 val msg = context.getString(R.string.speech_err_no_match)
                                 stateMachine.moveToError(msg, SpeechRecognizer.ERROR_NO_MATCH)
                                 onErrorOccurred?.invoke(msg, SpeechRecognizer.ERROR_NO_MATCH)
+                                scheduleErrorReset()
                             }
                         }
 
@@ -209,6 +294,7 @@ class SpeechEngine(private val context: Context) {
                 val errorMsg = context.getString(R.string.speech_err_unknown, -1)
                 stateMachine.moveToError(errorMsg, -1)
                 onErrorOccurred?.invoke(errorMsg, -1)
+                scheduleErrorReset()
             }
         }
     }
@@ -240,6 +326,7 @@ class SpeechEngine(private val context: Context) {
             } catch (e: Exception) {
                 Log.w(TAG, "ToneGenerator release error", e)
             }
+            scope.cancel()
         }
     }
 
