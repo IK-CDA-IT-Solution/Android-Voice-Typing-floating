@@ -149,8 +149,12 @@ class SpeechEngine(private val context: Context) {
         forceOnDevice: Boolean
     ) {
         mainHandler.post {
-            // Retry paths must retain the active Listening state; startListening() accepts IDLE only.
-            if (!isRetry && !stateMachine.startListening()) {
+            if (isRetry) {
+                if (!stateMachine.restartListening()) {
+                    Log.w(TAG, "Skipping recognizer retry because the session is no longer active")
+                    return@post
+                }
+            } else if (!stateMachine.startListening()) {
                 return@post
             }
 
