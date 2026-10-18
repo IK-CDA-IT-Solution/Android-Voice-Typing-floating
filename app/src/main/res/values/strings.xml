@@ -76,6 +76,7 @@
     <!-- Speech Recognizer Error Messages (Bangla) -->
     <string name="speech_err_network_timeout">নেটওয়ার্ক টাইমআউট হয়েছে। আবার চেষ্টা করুন।</string>
     <string name="speech_err_network">নেটওয়ার্ক সমস্যা! ইন্টারনেট কানেকশন চেক করুন বা অফলাইন ডাটা ব্যবহার করুন।</string>
+    <string name="speech_err_offline_unavailable">অনলাইন ও অফলাইন—দুই ধরনের স্পিচ রিকগনিশনই ব্যর্থ হয়েছে। Google Speech Services চালু করুন এবং এই ভাষার অফলাইন মডেল ডাউনলোড আছে কি না দেখুন।</string>
     <string name="speech_err_audio">অডিও রেকর্ডিং এরর। মাইক্রোফোন চেক করুন।</string>
     <string name="speech_err_server">সার্ভার এরর (Google Speech Server error)।</string>
     <string name="speech_err_client">ক্লায়েন্ট সাইড এরর।</string>
