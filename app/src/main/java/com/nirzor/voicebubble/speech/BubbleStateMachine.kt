@@ -29,6 +29,18 @@ class BubbleStateMachine {
         return true
     }
 
+    /**
+     * Restarts listening after a recoverable recognizer error, including an error
+     * delivered after onEndOfSpeech moved the state to Processing.
+     */
+    fun restartListening(): Boolean {
+        if (_state.value !is BubbleState.Listening && _state.value !is BubbleState.Processing) {
+            return false
+        }
+        _state.value = BubbleState.Listening(0f, "")
+        return true
+    }
+
     fun updateRms(rms: Float) {
         val current = _state.value
         if (current is BubbleState.Listening) {
