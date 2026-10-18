@@ -166,14 +166,23 @@ class FloatingBubbleService : Service() {
 
         _isServiceRunning.value = true
 
-        // Phase B.3: Start foreground service with microphone type
+        // Phase B.3: Start foreground service with microphone type (guarded by permission)
         val notification = createNotification()
-        val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        val hasMicPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+            this,
+            android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && hasMicPermission) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         } else {
             0
         }
-        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, foregroundType)
+        try {
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, foregroundType)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start foreground service", e)
+        }
 
         val shouldStartListening = intent?.getBooleanExtra(EXTRA_START_LISTENING, false) ?: false
         if (shouldStartListening) {
