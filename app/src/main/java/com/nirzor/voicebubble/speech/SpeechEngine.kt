@@ -107,7 +107,9 @@ class SpeechEngine(private val context: Context) {
             return
         }
 
-        if (!isRecognitionAvailable()) {
+        val defaultRecognizerAvailable = SpeechRecognizer.isRecognitionAvailable(context)
+        val onDeviceRecognizerAvailable = isOnDeviceRecognitionAvailable()
+        if (!defaultRecognizerAvailable && !onDeviceRecognizerAvailable) {
             val errorMsg = context.getString(R.string.speech_not_available)
             stateMachine.moveToError(errorMsg, -1)
             onErrorOccurred?.invoke(errorMsg, -1)
@@ -131,7 +133,7 @@ class SpeechEngine(private val context: Context) {
                 onFinalResult = onFinalResult,
                 onErrorOccurred = onErrorOccurred,
                 isRetry = false,
-                forceOnDevice = false
+                forceOnDevice = !defaultRecognizerAvailable
             )
         }
     }
