@@ -42,22 +42,41 @@ jobs:
       - name: Grant Execute Permission to Gradlew
         run: chmod +x gradlew
 
+      - name: Run Unit Tests
+        run: ./gradlew test --stacktrace
+
       - name: Extract Version Tag
         id: get_version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION_TAG: ${{ github.event.inputs.version_tag }}
+          RELEASE_REF: ${{ github.ref }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version_tag }}" ]; then
-            TAG_NAME="${{ github.event.inputs.version_tag }}"
-          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            TAG_NAME="${GITHUB_REF#refs/tags/}"
-          elif [[ "$GITHUB_REF" == refs/heads/release/v* ]]; then
-            TAG_NAME="${GITHUB_REF#refs/heads/release/}"
-          else
-            echo "::error::Unable to determine release tag from ref: $GITHUB_REF"
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            workflow_dispatch)
+              if [[ -z "$INPUT_VERSION_TAG" ]]; then
+                echo "::error::A release version tag is required for manual releases."
+                exit 1
+              fi
+              RAW_TAG="$INPUT_VERSION_TAG"
+              ;;
+            *)
+              if [[ "$RELEASE_REF" == refs/tags/* ]]; then
+                RAW_TAG="${RELEASE_REF#refs/tags/}"
+              elif [[ "$RELEASE_REF" == refs/heads/release/v* ]]; then
+                RAW_TAG="${RELEASE_REF#refs/heads/release/}"
+              else
+                echo "::error::Unable to determine release tag from the triggering ref."
+                exit 1
+              fi
+              ;;
+          esac
+          VERSION_OUTPUT=$("$GITHUB_WORKSPACE/scripts/validate-release-version.sh" "$RAW_TAG") || {
+            echo "::error::Release version is invalid; expected a stable vMAJOR.MINOR.PATCH within Android version-code limits."
             exit 1
-          fi
-          VERSION_NAME="${TAG_NAME#v}"
-          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
-          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+          }
+          printf '%s\n' "$VERSION_OUTPUT" >> "$GITHUB_ENV"
 
       - name: Validate Stable Signing Key
         env:
@@ -92,7 +111,7 @@ jobs:
 
       - name: Build Release APK
         run: |
-          ./gradlew assembleRelease -PversionName=${{ env.VERSION_NAME }} --stacktrace
+          ./gradlew assembleRelease "-PversionName=$VERSION_NAME" --stacktrace
 
       - name: Verify update signing compatibility
         run: |

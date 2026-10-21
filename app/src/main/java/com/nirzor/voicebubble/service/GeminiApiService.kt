@@ -11,17 +11,13 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import okhttp3.Interceptor
 import okhttp3.OkHttpClient
-import okhttp3.Response
 import okhttp3.logging.HttpLoggingInterceptor
-import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.Header
 import retrofit2.http.POST
-import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 @JsonClass(generateAdapter = true)
@@ -68,14 +64,6 @@ interface GeminiApi {
         @Header("x-goog-api-key") apiKey: String,
         @Body request: GenerateContentRequest
     ): GenerateContentResponse
-}
-
-enum class KeyTestState {
-    IDLE,
-    TESTING,
-    VALID,
-    INVALID,
-    NETWORK_ERROR
 }
 
 object GeminiApiClient {
@@ -181,20 +169,10 @@ object GeminiApiClient {
             generationConfig = GenerationConfig(temperature = 0.2f)
         )
 
-        try {
-            withTimeout(35_000L) {
-                service.generateContent(apiKey = apiKey, request = request)
-            }
-            KeyTestState.VALID
-        } catch (e: HttpException) {
-            Log.w(TAG, "API Key test returned HTTP ${e.code()}")
-            KeyTestState.INVALID
-        } catch (e: IOException) {
-            Log.w(TAG, "Network error during API key test", e)
-            KeyTestState.NETWORK_ERROR
-        } catch (e: Exception) {
-            Log.w(TAG, "Error testing API key", e)
-            KeyTestState.NETWORK_ERROR
+        executeKeyTest(onHttpStatus = { code ->
+            Log.w(TAG, "API Key test returned HTTP $code")
+        }) {
+            service.generateContent(apiKey = apiKey, request = request)
         }
     }
 }

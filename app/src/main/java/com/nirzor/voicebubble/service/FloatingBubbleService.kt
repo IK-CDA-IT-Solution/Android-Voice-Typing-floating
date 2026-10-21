@@ -106,6 +106,7 @@ class FloatingBubbleService : Service() {
     private var touchSlop = 16
     private var isDragging = false
     private var isOverRemoveTarget = false
+    private var latestPartialTranscript = ""
 
     companion object {
         const val ACTION_START = "com.nirzor.voicebubble.ACTION_START"
@@ -626,11 +627,14 @@ class FloatingBubbleService : Service() {
         cancelAutoDismiss()
         copiedBadge?.visibility = View.GONE
         previewPill?.visibility = View.GONE
+        previewPillText?.maxLines = 2
+        latestPartialTranscript = ""
         speechEngine.startSession(
             languageCode = appPreferences.selectedLanguage.value,
             playTone = appPreferences.soundFeedback.value,
             enableHaptic = appPreferences.hapticFeedback.value,
             onPartialResult = { partial ->
+                latestPartialTranscript = partial
                 mainHandler.post {
                     previewPill?.visibility = View.VISIBLE
                     previewPillText?.text = partial
@@ -642,7 +646,12 @@ class FloatingBubbleService : Service() {
             onErrorOccurred = { errorMsg, _ ->
                 mainHandler.post {
                     previewPill?.visibility = View.VISIBLE
-                    previewPillText?.text = errorMsg
+                    previewPillText?.maxLines = 5
+                    previewPillText?.text = if (latestPartialTranscript.isBlank()) {
+                        errorMsg
+                    } else {
+                        "${latestPartialTranscript.lineSequence().first().take(80)}\n$errorMsg"
+                    }
                     scheduleAutoDismiss()
                 }
             }

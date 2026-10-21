@@ -39,3 +39,11 @@ jobs:
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload Branch APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: voicebubble-debug-${{ github.sha }}
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14

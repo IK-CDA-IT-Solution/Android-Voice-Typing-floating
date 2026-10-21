@@ -87,6 +87,7 @@
     <string name="speech_err_no_match">কোনো কথা শনাক্ত করা যায়নি (No speech detected)।</string>
     <string name="speech_err_busy">স্পিচ সার্ভিস ব্যস্ত রয়েছে, পুনরায় চেষ্টা করা হচ্ছে...</string>
     <string name="speech_err_busy_final">স্পিচ সার্ভিস ব্যস্ত রয়েছে। কিছুক্ষণ পর চেষ্টা করুন।</string>
+    <string name="speech_err_updating">অ্যাপের আপডেটের কাজ চলছে। শেষ হলে আবার ভয়েস টাইপিং শুরু করুন।</string>
     <string name="speech_err_permissions">মাইক্রোফোন পারমিশন প্রয়োজন (Microphone permission required)।</string>
     <string name="speech_err_unknown">ভয়েস টাইপিং ত্রুটি (%1$d)।</string>
     <string name="speech_not_available">ডিভাইসে স্পিচ রিকগনিশন সেবা অনুপলব্ধ। Google Speech Services ইন্সটল বা চালু করুন।</string>
@@ -160,8 +161,16 @@
     <string name="gemini_test_btn_idle">Test Key</string>
     <string name="gemini_test_btn_testing">যাচাই করা হচ্ছে...</string>
     <string name="gemini_test_valid">✓ API Key বৈধ ও কার্যকর!</string>
-    <string name="gemini_test_invalid">❌ API Key অবৈধ বা মেয়াদোত্তীর্ণ!</string>
-    <string name="gemini_test_network_error">⚠️ API অনুরোধের সময়সীমা পেরিয়ে গেছে বা সংযোগে সমস্যা। আবার চেষ্টা করুন।</string>
+    <string name="gemini_test_invalid">আগে একটি API Key দিন।</string>
+    <string name="gemini_test_auth_error">API পরিচয় যাচাই ব্যর্থ। API Key সঠিক ও কার্যকর কি না যাচাই করুন।</string>
+    <string name="gemini_test_permission_error">HTTP 403: API ব্যবহারের অনুমতি নেই। প্রজেক্টের অনুমতি ও key restriction যাচাই করুন।</string>
+    <string name="gemini_test_model_error">HTTP 404: নির্ধারিত model বা endpoint পাওয়া যায়নি। এটি key অবৈধ হওয়ার প্রমাণ নয়।</string>
+    <string name="gemini_test_quota_error">HTTP 429: quota বা rate limit পূর্ণ। কিছুক্ষণ পরে চেষ্টা করুন বা quota যাচাই করুন।</string>
+    <string name="gemini_test_server_error">Gemini সার্ভারে সমস্যা (HTTP 5xx)। পরে আবার চেষ্টা করুন।</string>
+    <string name="gemini_test_request_error">API অনুরোধ গ্রহণ করা যায়নি। request বা API configuration যাচাই করুন।</string>
+    <string name="gemini_test_timeout">API অনুরোধের সময়সীমা পেরিয়েছে। আবার চেষ্টা করুন।</string>
+    <string name="gemini_test_network_error">API সার্ভিসে সংযোগ করা যায়নি। সংযোগ যাচাই করে আবার চেষ্টা করুন।</string>
+    <string name="gemini_test_unknown_error">API পরীক্ষা সম্পন্ন হয়নি। পরে আবার চেষ্টা করুন; key অবৈধ বলে নিশ্চিত করা যায়নি।</string>
     <string name="gemini_direct_audio_title">Direct Gemini Audio (Experimental / পরীক্ষামূলক)</string>
     <string name="gemini_direct_audio_desc">স্পিচ রিকগনাইজারের বদলে সরাসরি অডিও পাঠিয়ে ট্রান্সক্রিপশন (পরিকল্পিত)</string>
     <string name="gemini_direct_audio_disabled_notice">বর্তমানে পরীক্ষামূলক পর্যায়ে রয়েছে (Default OFF)</string>

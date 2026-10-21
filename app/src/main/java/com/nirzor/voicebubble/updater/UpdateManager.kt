@@ -3,13 +3,15 @@ package com.nirzor.voicebubble.updater
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
 import android.content.pm.PackageInstaller
 import android.os.Build
 import android.util.Log
 import com.nirzor.voicebubble.BuildConfig
 import com.nirzor.voicebubble.R
 import com.nirzor.voicebubble.VoiceBubbleApp
-import com.nirzor.voicebubble.service.FloatingBubbleService
+import com.nirzor.voicebubble.speech.SpeechEngine
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -20,7 +22,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -47,7 +48,13 @@ sealed interface UpdateStatus {
     data class ReadyToInstall(val apkFile: File) : UpdateStatus
     object Installing : UpdateStatus
     data class Installed(val version: String) : UpdateStatus
-    data class Error(val message: String, val canRetry: Boolean = true) : UpdateStatus
+    data class Error(
+        val message: String,
+        val canRetry: Boolean = true,
+        val installerStatusCode: Int? = null,
+        val installerSessionId: Int? = null,
+        val targetVersionCode: Int? = null
+    ) : UpdateStatus
 }
 
 @JsonClass(generateAdapter = true)
@@ -71,14 +78,30 @@ class UpdateManager(private val context: Context) {
 
     private val _status = MutableStateFlow<UpdateStatus>(UpdateStatus.Idle)
     val status: StateFlow<UpdateStatus> = _status.asStateFlow()
+    private val _isBusy = MutableStateFlow(false)
+    val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
 
     private var cachedApkFile: File? = null
+    private val operationLock = Any()
+    @Volatile private var operationInProgress = false
+    @Volatile private var lastDownloadInfo: UpdateInfo? = null
+    @Volatile private var verifiedApkInfo: UpdateInfo? = null
+    @Volatile private var verifiedApkSha256: String? = null
+    private val updatePrefs by lazy {
+        context.getSharedPreferences("updater_state", Context.MODE_PRIVATE)
+    }
+
+    init {
+        recoverInterruptedUpdate()
+    }
 
     companion object {
         private const val OWNER = "engrnirzorme02"
         private const val REPO = "NIRZOR-Voice-Typing-floating"
         private const val APK_NAME = "voicebubble.apk"
         private const val SHA_NAME = "voicebubble.apk.sha256"
+        private const val KEY_PENDING_VERSION_CODE = "pending_version_code"
+        private const val KEY_PENDING_SESSION_ID = "pending_session_id"
 
         @Volatile
         private var INSTANCE: UpdateManager? = null
@@ -99,6 +122,77 @@ class UpdateManager(private val context: Context) {
             val patch = parts.getOrElse(2) { 0 }
             return major * 10000 + minor * 100 + patch
         }
+    }
+
+    private fun beginOperation(): Boolean = synchronized(operationLock) {
+        if (operationInProgress) return@synchronized false
+        operationInProgress = true
+        _isBusy.value = true
+        true
+    }
+
+    private fun finishOperation() = synchronized(operationLock) {
+        operationInProgress = false
+        _isBusy.value = false
+    }
+
+    private fun recoverInterruptedUpdate() {
+        val pendingCode = updatePrefs.getInt(KEY_PENDING_VERSION_CODE, 0)
+        if (pendingCode == 0) {
+            File(context.cacheDir, "voicebubble_update.apk").delete()
+            return
+        }
+        val installed = installedPackageInfo()
+        if (installed != null && installed.versionCodeCompat() >= pendingCode) {
+            clearPendingInstall()
+            _status.value = UpdateStatus.Installed(installed.versionName ?: BuildConfig.VERSION_NAME)
+            return
+        }
+        val pendingSessionId = updatePrefs.getInt(KEY_PENDING_SESSION_ID, -1)
+        val sessionInfo = try {
+            context.packageManager.packageInstaller.mySessions.firstOrNull { it.sessionId == pendingSessionId }
+        } catch (_: Exception) {
+            null
+        }
+        val recoveryDecision = installerRecoveryDecision(
+            sessionFound = sessionInfo != null,
+            isSealed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) sessionInfo?.isSealed else null,
+            isCommitted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) sessionInfo?.isCommitted else null
+        )
+        if (recoveryDecision == InstallerRecoveryDecision.RESTORE_AWAITING_RESULT) {
+            operationInProgress = true
+            _isBusy.value = true
+            _status.value = UpdateStatus.Installing
+        } else {
+            if (sessionInfo != null) {
+                try {
+                    context.packageManager.packageInstaller.abandonSession(pendingSessionId)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not abandon interrupted installer session", e)
+                }
+            }
+            clearPendingInstall()
+            File(context.cacheDir, "voicebubble_update.apk").delete()
+            _status.value = UpdateStatus.Error("আপডেটটি সম্পন্ন হয়নি। আবার চেষ্টা করুন।")
+        }
+    }
+
+    private fun clearPendingInstall() {
+        updatePrefs.edit().remove(KEY_PENDING_VERSION_CODE).remove(KEY_PENDING_SESSION_ID).apply()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun PackageInfo.versionCodeCompat(): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) longVersionCode.toInt() else versionCode
+
+    private fun installedPackageInfo(): PackageInfo? = try {
+        context.packageManager.getPackageInfo(
+            context.packageName,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) PackageManager.GET_SIGNING_CERTIFICATES
+            else PackageManager.GET_SIGNATURES
+        )
+    } catch (_: Exception) {
+        null
     }
 
     private val httpClient: OkHttpClient by lazy {
@@ -127,8 +221,10 @@ class UpdateManager(private val context: Context) {
             }
         }
 
+        if (!beginOperation()) return
+        lastDownloadInfo = null
+
         _status.value = UpdateStatus.Checking
-        prefs.setLastUpdateCheckTime(now)
 
         scope.launch {
             try {
@@ -155,7 +251,7 @@ class UpdateManager(private val context: Context) {
 
                 if (response.code == 404) {
                     response.close()
-                    _status.value = UpdateStatus.UpToDate(BuildConfig.VERSION_NAME)
+                    _status.value = UpdateStatus.Error("রিলিজ তথ্য পাওয়া যায়নি (HTTP 404)")
                     return@launch
                 }
 
@@ -179,7 +275,11 @@ class UpdateManager(private val context: Context) {
 
                 val tagName = release.tag_name
                 val cleanTag = tagName.removePrefix("v").trim()
-                val latestCode = parseVersionCode(cleanTag)
+                val latestCode = parseReleaseVersionCode(cleanTag)
+                if (latestCode == null) {
+                    _status.value = UpdateStatus.Error("রিলিজ সংস্করণের তথ্য অবৈধ")
+                    return@launch
+                }
                 val changelog = release.body ?: ""
 
                 val apkAsset = release.assets?.find { it.name == APK_NAME }
@@ -189,6 +289,11 @@ class UpdateManager(private val context: Context) {
                     ?: "https://github.com/$OWNER/$REPO/releases/download/$tagName/$APK_NAME"
                 val shaUrl = shaAsset?.browser_download_url
                     ?: "https://github.com/$OWNER/$REPO/releases/download/$tagName/$SHA_NAME"
+
+                if (!isTrustedReleaseAssetUrl(apkUrl) || !isTrustedReleaseAssetUrl(shaUrl)) {
+                    _status.value = UpdateStatus.Error("আপডেটের ডাউনলোড ঠিকানা যাচাই করা যায়নি")
+                    return@launch
+                }
 
                 val updateInfo = UpdateInfo(
                     versionName = cleanTag,
@@ -204,7 +309,20 @@ class UpdateManager(private val context: Context) {
             } catch (e: Exception) {
                 Log.e(TAG, "Update check failed", e)
                 _status.value = UpdateStatus.Error("নেটওয়ার্ক ত্রুটি: ইন্টারনেট কানেকশন চেক করুন")
+            } finally {
+                finishOperation()
             }
+        }
+    }
+
+    /** Re-check releases after an error; the UI should call this instead of merely clearing status. */
+    fun retry() {
+        val failed = _status.value as? UpdateStatus.Error
+        val retryInfo = lastDownloadInfo
+        if (failed != null && retryInfo != null && retryInfo.versionCode > BuildConfig.VERSION_CODE) {
+            startDownload(retryInfo)
+        } else {
+            checkForUpdates(isAutoCheck = false)
         }
     }
 
@@ -228,7 +346,7 @@ class UpdateManager(private val context: Context) {
             if (location.isNotBlank()) {
                 val tag = location.substringAfterLast("/")
                 val cleanTag = tag.removePrefix("v").trim()
-                val code = parseVersionCode(cleanTag)
+                val code = parseReleaseVersionCode(cleanTag) ?: return null
 
                 UpdateInfo(
                     versionName = cleanTag,
@@ -248,6 +366,7 @@ class UpdateManager(private val context: Context) {
     }
 
     private fun evaluateRelease(info: UpdateInfo) {
+        VoiceBubbleApp.instance.preferences.setLastUpdateCheckTime(System.currentTimeMillis())
         if (info.versionCode > BuildConfig.VERSION_CODE) {
             _status.value = UpdateStatus.UpdateAvailable(info)
         } else {
@@ -256,29 +375,43 @@ class UpdateManager(private val context: Context) {
     }
 
     fun startDownload(info: UpdateInfo) {
-        // Block update if service is currently recording
-        if (FloatingBubbleService.isServiceRunning.value) {
-            _status.value = UpdateStatus.Error(context.getString(R.string.updater_blocked_busy))
-            return
+        lastDownloadInfo = info
+        val began = synchronized(SpeechEngine.sessionUpdateLock) {
+            if (SpeechEngine.isAnySessionActive) {
+                _status.value = UpdateStatus.Error(context.getString(R.string.updater_blocked_busy))
+                false
+            } else {
+                beginOperation()
+            }
         }
+        if (!began) return
 
         scope.launch {
+            var awaitingInstallerResult = false
             try {
+                if (parseReleaseVersionCode(info.versionName) != info.versionCode || info.versionCode <= BuildConfig.VERSION_CODE) {
+                    _status.value = UpdateStatus.Error("আপডেটের সংস্করণ যাচাই করা যায়নি")
+                    return@launch
+                }
+                if (!isTrustedReleaseAssetUrl(info.apkDownloadUrl) ||
+                    info.sha256DownloadUrl == null || !isTrustedReleaseAssetUrl(info.sha256DownloadUrl)) {
+                    _status.value = UpdateStatus.Error("আপডেটের ডাউনলোড ঠিকানা যাচাই করা যায়নি")
+                    return@launch
+                }
+                if (info.expectedSize != null && info.expectedSize <= 0L) {
+                    _status.value = UpdateStatus.Error("আপডেট ফাইলের আকার যাচাই করা যায়নি")
+                    return@launch
+                }
                 _status.value = UpdateStatus.Downloading(0, info)
 
-                // 1. Fetch expected SHA256 if available
-                var expectedSha256: String? = null
-                if (info.sha256DownloadUrl != null) {
-                    try {
-                        val shaRequest = Request.Builder().url(info.sha256DownloadUrl).build()
-                        val shaResponse = httpClient.newCall(shaRequest).execute()
-                        if (shaResponse.isSuccessful) {
-                            expectedSha256 = shaResponse.body?.string()?.trim()?.split("\\s+".toRegex())?.firstOrNull()
-                        }
-                        shaResponse.close()
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Could not fetch sha256 checksum", e)
-                    }
+                val shaRequest = Request.Builder().url(info.sha256DownloadUrl).build()
+                val shaResponse = httpClient.newCall(shaRequest).execute()
+                val expectedSha256 = shaResponse.use { response ->
+                    if (!response.isSuccessful) null else parseSha256Checksum(response.body?.string())
+                }
+                if (expectedSha256 == null) {
+                    _status.value = UpdateStatus.Error("SHA-256 চেকসাম পাওয়া যায়নি বা অবৈধ")
+                    return@launch
                 }
 
                 // 2. Download APK file
@@ -288,65 +421,75 @@ class UpdateManager(private val context: Context) {
                 val apkRequest = Request.Builder().url(info.apkDownloadUrl).build()
                 val apkResponse = httpClient.newCall(apkRequest).execute()
 
-                if (!apkResponse.isSuccessful) {
-                    apkResponse.close()
-                    _status.value = UpdateStatus.Error("APK ডাউনলোড ব্যর্থ হয়েছে (HTTP ${apkResponse.code})")
-                    return@launch
-                }
-
-                val body = apkResponse.body ?: run {
-                    apkResponse.close()
-                    _status.value = UpdateStatus.Error("ডাউনলোড রেসপন্স খালি ছিল")
-                    return@launch
-                }
-
-                val totalBytes = body.contentLength()
-                val inputStream = body.byteStream()
-                val outputStream = FileOutputStream(apkFile)
-
-                val buffer = ByteArray(8192)
-                var bytesRead: Int
-                var downloadedBytes: Long = 0
-                var lastProgress = 0
-
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    outputStream.write(buffer, 0, bytesRead)
-                    downloadedBytes += bytesRead
-                    if (totalBytes > 0) {
-                        val progress = ((downloadedBytes * 100) / totalBytes).toInt()
-                        if (progress != lastProgress) {
-                            lastProgress = progress
-                            _status.value = UpdateStatus.Downloading(progress, info)
+                var downloadedBytes = 0L
+                apkResponse.use { response ->
+                    if (!response.isSuccessful) {
+                        _status.value = UpdateStatus.Error("APK ডাউনলোড ব্যর্থ হয়েছে (HTTP ${response.code})")
+                        return@launch
+                    }
+                    val body = response.body ?: run {
+                        _status.value = UpdateStatus.Error("ডাউনলোড রেসপন্স খালি ছিল")
+                        return@launch
+                    }
+                    val totalBytes = body.contentLength()
+                    if (info.expectedSize != null && totalBytes >= 0L && totalBytes != info.expectedSize) {
+                        _status.value = UpdateStatus.Error("আপডেট ফাইলের আকার মেলেনি")
+                        return@launch
+                    }
+                    body.byteStream().use { input ->
+                        FileOutputStream(apkFile).use { output ->
+                            val buffer = ByteArray(8192)
+                            var lastProgress = 0
+                            while (true) {
+                                val bytesRead = input.read(buffer)
+                                if (bytesRead < 0) break
+                                output.write(buffer, 0, bytesRead)
+                                downloadedBytes += bytesRead
+                                if (totalBytes > 0) {
+                                    val progress = ((downloadedBytes * 100) / totalBytes).toInt().coerceIn(0, 100)
+                                    if (progress != lastProgress) {
+                                        lastProgress = progress
+                                        _status.value = UpdateStatus.Downloading(progress, info)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
-                outputStream.flush()
-                outputStream.close()
-                inputStream.close()
-                apkResponse.close()
+                if (downloadedBytes == 0L || (info.expectedSize != null && downloadedBytes != info.expectedSize)) {
+                    apkFile.delete()
+                    _status.value = UpdateStatus.Error("আপডেট ফাইলের আকার মেলেনি")
+                    return@launch
+                }
 
                 // 3. Verify SHA256
                 _status.value = UpdateStatus.Verifying
 
-                if (!expectedSha256.isNullOrBlank()) {
-                    val actualSha = calculateFileSha256(apkFile)
-                    if (!actualSha.equals(expectedSha256, ignoreCase = true)) {
-                        apkFile.delete()
-                        _status.value = UpdateStatus.Error(context.getString(R.string.updater_sha_mismatch))
-                        return@launch
-                    }
+                if (!calculateFileSha256(apkFile).equals(expectedSha256, ignoreCase = true)) {
+                    apkFile.delete()
+                    _status.value = UpdateStatus.Error(context.getString(R.string.updater_sha_mismatch))
+                    return@launch
+                }
+                if (!validateDownloadedApk(apkFile, info)) {
+                    apkFile.delete()
+                    _status.value = UpdateStatus.Error("ডাউনলোড করা অ্যাপের পরিচয় বা স্বাক্ষর যাচাই করা যায়নি")
+                    return@launch
                 }
 
                 cachedApkFile = apkFile
+                verifiedApkInfo = info
+                verifiedApkSha256 = expectedSha256
                 // The user already selected "Download & Install". Continue directly
                 // to PackageInstaller after the downloaded APK passes SHA-256 validation.
                 _status.value = UpdateStatus.ReadyToInstall(apkFile)
                 Log.i(TAG, "APK download and checksum verification succeeded; starting installation")
-                installApk(apkFile)
+                awaitingInstallerResult = installApkInternal(apkFile, info.versionCode)
 
             } catch (e: Exception) {
-                Log.e(TAG, "Download failed", e)
-                _status.value = UpdateStatus.Error("ডাউনলোড ব্যর্থ হয়েছে: ${e.localizedMessage}")
+                Log.w(TAG, "Update download or validation failed", e)
+                _status.value = UpdateStatus.Error("ডাউনলোড বা যাচাই ব্যর্থ হয়েছে। আবার চেষ্টা করুন।")
+            } finally {
+                if (!awaitingInstallerResult) finishOperation()
             }
         }
     }
@@ -363,23 +506,100 @@ class UpdateManager(private val context: Context) {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    fun installApk(apkFile: File) {
+    @Suppress("DEPRECATION")
+    private fun validateDownloadedApk(apkFile: File, info: UpdateInfo): Boolean {
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            PackageManager.GET_SIGNING_CERTIFICATES
+        } else {
+            PackageManager.GET_SIGNATURES
+        }
+        val archive = context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, flags) ?: return false
+        val installed = installedPackageInfo() ?: return false
+        if (archive.packageName != context.packageName || archive.versionCodeCompat() != info.versionCode) return false
+        if (archive.versionName != info.versionName) return false
+
+        val archiveSigners = signingCertificates(archive)
+        val installedSigners = signingCertificates(installed)
+        return isApkMetadataTrusted(
+            archivePackageName = archive.packageName,
+            archiveVersionName = archive.versionName,
+            archiveVersionCode = archive.versionCodeCompat(),
+            expectedPackageName = context.packageName,
+            expectedVersionName = info.versionName,
+            expectedVersionCode = info.versionCode,
+            archiveSigners = archiveSigners,
+            installedSigners = installedSigners
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun signingCertificates(packageInfo: PackageInfo): Set<String> {
+        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.signingInfo?.apkContentsSigners
+        } else {
+            packageInfo.signatures
+        }
+        return signatures.orEmpty().map { it.toCharsString() }.toSet()
+    }
+
+
+    fun installApk(apkFile: File): Boolean {
+        val info = lastDownloadInfo ?: return false
+        val validatedInfo = verifiedApkInfo ?: return false
+        val validatedSha = verifiedApkSha256 ?: return false
+        val cached = cachedApkFile ?: return false
+        val fileIsStillTrusted = try {
+            info == validatedInfo && apkFile.exists() && cached.exists() &&
+                apkFile.canonicalFile == cached.canonicalFile &&
+                calculateFileSha256(apkFile).equals(validatedSha, ignoreCase = true) &&
+                validateDownloadedApk(apkFile, info)
+        } catch (e: Exception) {
+            Log.w(TAG, "Cached APK revalidation failed", e)
+            false
+        }
+        if (!fileIsStillTrusted) {
+            _status.value = UpdateStatus.Error("ইনস্টলার ফাইলের যাচাইকরণ ব্যর্থ হয়েছে। আবার ডাউনলোড করুন।")
+            return false
+        }
+        val began = synchronized(SpeechEngine.sessionUpdateLock) {
+            if (SpeechEngine.isAnySessionActive) {
+                _status.value = UpdateStatus.Error(context.getString(R.string.updater_blocked_busy))
+                false
+            } else {
+                beginOperation()
+            }
+        }
+        if (!began) return false
+        val started = installApkInternal(apkFile, info.versionCode)
+        if (!started) finishOperation()
+        return started
+    }
+
+    private fun installApkInternal(apkFile: File, targetVersionCode: Int?): Boolean {
         if (!apkFile.exists()) {
             _status.value = UpdateStatus.Error("ইনস্টলার ফাইল খুঁজে পাওয়া যায়নি")
-            return
+            return false
         }
 
         _status.value = UpdateStatus.Installing
 
+        var packageInstaller: PackageInstaller? = null
+        var session: PackageInstaller.Session? = null
+        var sessionId = -1
         try {
-            val packageInstaller = context.packageManager.packageInstaller
+            packageInstaller = context.packageManager.packageInstaller
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+            params.setAppPackageName(context.packageName)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
             }
 
-            val sessionId = packageInstaller.createSession(params)
-            val session = packageInstaller.openSession(sessionId)
+            sessionId = packageInstaller.createSession(params)
+            updatePrefs.edit()
+                .putInt(KEY_PENDING_VERSION_CODE, targetVersionCode ?: BuildConfig.VERSION_CODE)
+                .putInt(KEY_PENDING_SESSION_ID, sessionId)
+                .apply()
+            session = packageInstaller.openSession(sessionId)
 
             session.openWrite("voicebubble_package", 0, apkFile.length()).use { out ->
                 apkFile.inputStream().use { input ->
@@ -399,30 +619,91 @@ class UpdateManager(private val context: Context) {
                 PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
 
-            session.commit(pendingIntent.intentSender)
-            session.close()
+            val sessionToCommit = session
+                ?: throw IllegalStateException("Installer session is not available")
+            val committed = synchronized(SpeechEngine.sessionUpdateLock) {
+                if (SpeechEngine.isAnySessionActive) {
+                    false
+                } else {
+                    sessionToCommit.commit(pendingIntent.intentSender)
+                    true
+                }
+            }
+            if (!committed) {
+                try { sessionToCommit.close() } catch (_: Exception) { }
+                session = null
+                try { packageInstaller.abandonSession(sessionId) } catch (_: Exception) { }
+                clearPendingInstall()
+                _status.value = UpdateStatus.Error(context.getString(R.string.updater_blocked_busy))
+                finishOperation()
+                return false
+            }
+            try { sessionToCommit.close() } catch (e: Exception) {
+                Log.w(TAG, "Committed installer session close failed", e)
+            }
+            session = null
+            return true
 
         } catch (e: Exception) {
             Log.e(TAG, "Install failed to launch session", e)
-            _status.value = UpdateStatus.Error("ইনস্টলার সেশন শুরু করতে ব্যর্থ হয়েছে: ${e.localizedMessage}")
+            try { session?.close() } catch (_: Exception) { }
+            if (sessionId >= 0) {
+                try { packageInstaller?.abandonSession(sessionId) } catch (_: Exception) { }
+            }
+            clearPendingInstall()
+            _status.value = UpdateStatus.Error("ইনস্টলার সেশন শুরু করতে ব্যর্থ হয়েছে। আবার চেষ্টা করুন।")
+            finishOperation()
+            return false
         }
     }
 
     fun onInstallSuccess() {
         cachedApkFile?.delete()
         cachedApkFile = null
-        val currentVer = BuildConfig.VERSION_NAME
-        _status.value = UpdateStatus.Installed(currentVer)
-        VoiceBubbleApp.instance.preferences.setLastInstalledVersionCode(BuildConfig.VERSION_CODE)
+        val expectedCode = updatePrefs.getInt(KEY_PENDING_VERSION_CODE, 0)
+        val installed = installedPackageInfo()
+        val installedCode = installed?.versionCodeCompat() ?: 0
+        clearPendingInstall()
+        finishOperation()
+        if (installed == null || installedCode == 0 || (expectedCode != 0 && installedCode < expectedCode)) {
+            _status.value = UpdateStatus.Error("ইনস্টলেশন সম্পন্ন হয়েছে কি না যাচাই করা যায়নি। অ্যাপটি আবার খুলুন।")
+            return
+        }
+        _status.value = UpdateStatus.Installed(installed.versionName ?: BuildConfig.VERSION_NAME)
+        // MainActivity records the new version on launch, preserving its update-success toast.
     }
 
-    fun onInstallFailure(reason: String) {
+    fun onInstallFailure(reason: String, sessionId: Int = -1) {
+        if (sessionId >= 0) {
+            try {
+                context.packageManager.packageInstaller.abandonSession(sessionId)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not abandon failed confirmation session", e)
+            }
+        }
         cachedApkFile?.delete()
         cachedApkFile = null
+        clearPendingInstall()
+        finishOperation()
         _status.value = UpdateStatus.Error(reason)
     }
 
+    fun onInstallFailure(statusCode: Int, sessionId: Int) {
+        val targetCode = updatePrefs.getInt(KEY_PENDING_VERSION_CODE, 0).takeIf { it > 0 }
+        cachedApkFile?.delete()
+        cachedApkFile = null
+        clearPendingInstall()
+        finishOperation()
+        _status.value = UpdateStatus.Error(
+            message = installerFailureMessage(statusCode),
+            installerStatusCode = statusCode,
+            installerSessionId = sessionId.takeIf { it >= 0 },
+            targetVersionCode = targetCode
+        )
+    }
+
     fun reset() {
+        if (operationInProgress) return
         _status.value = UpdateStatus.Idle
     }
 }

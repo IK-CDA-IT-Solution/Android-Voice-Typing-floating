@@ -116,6 +116,7 @@ fun HomeScreen(
     val testSpeechState by testSpeechEngine.speechState.collectAsState()
     val testRms = (testSpeechState as? BubbleState.Listening)?.rmsDb ?: 0f
     var inAppTranscription by remember { mutableStateOf("") }
+    var speechStatusMessage by remember { mutableStateOf("") }
     var justCopiedInApp by remember { mutableStateOf(false) }
 
     val isTestListening = testSpeechState is BubbleState.Listening
@@ -442,6 +443,14 @@ fun HomeScreen(
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
+                if (speechStatusMessage.isNotBlank()) {
+                    Text(
+                        text = speechStatusMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.testTag("speech_provider_status")
+                    )
+                }
 
                 // Action Bar
                 Row(
@@ -455,6 +464,7 @@ fun HomeScreen(
                                 testSpeechEngine.stopSession()
                             } else {
                                 inAppTranscription = ""
+                                speechStatusMessage = ""
                                 justCopiedInApp = false
                                 testSpeechEngine.startSession(
                                     languageCode = selectedLangCode,
@@ -462,9 +472,11 @@ fun HomeScreen(
                                     enableHaptic = prefs.hapticFeedback.value,
                                     onPartialResult = { partial ->
                                         inAppTranscription = partial
+                                        speechStatusMessage = ""
                                     },
                                     onFinalResult = { rawResult, lang, durationMs ->
                                         inAppTranscription = rawResult
+                                        speechStatusMessage = ""
                                         justCopiedInApp = false
 
                                         scope.launch {
@@ -514,7 +526,7 @@ fun HomeScreen(
                                         }
                                     },
                                     onErrorOccurred = { errorMsg, _ ->
-                                        inAppTranscription = errorMsg
+                                        speechStatusMessage = errorMsg
                                     }
                                 )
                             }
