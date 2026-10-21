@@ -107,27 +107,21 @@ jobs:
 
           echo "ANDROID_HOME=${ANDROID_HOME:-<unset>}"
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-<unset>}"
+
+          # Prefer the SDK tool already on PATH; otherwise resolve it only under the
+          # SDK root supplied by the runner. Avoid scanning the entire filesystem or
+          # relying on hard-coded hosted-runner directories.
           APKSIGNER="$(command -v apksigner 2>/dev/null || true)"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
 
-          if [ -z "$APKSIGNER" ]; then
-            for SDK_ROOT in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" \
-              "/usr/local/lib/android/sdk" "/usr/lib/android-sdk" \
-              "/opt/android-sdk" "/home/runner/Android/Sdk" \
-              "/opt/hostedtoolcache/android-sdk"; do
-              if [ -n "$SDK_ROOT" ] && [ -d "$SDK_ROOT" ]; then
-                APKSIGNER=$(find "$SDK_ROOT" -name apksigner 2>/dev/null | sort -V | tail -n 1)
-                if [ -n "$APKSIGNER" ]; then break; fi
-              fi
-            done
-          fi
-
-          if [ -z "$APKSIGNER" ]; then
-            # Last-resort search for SDKs installed outside the standard runner paths.
-            APKSIGNER=$(find / -name apksigner 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -z "$APKSIGNER" ] && [ -n "$SDK_ROOT" ] && [ -d "$SDK_ROOT/build-tools" ]; then
+            APKSIGNER="$(find "$SDK_ROOT/build-tools" -mindepth 2 -maxdepth 2 \
+              -type f -name apksigner -print 2>/dev/null | sort -V | tail -n 1)"
           fi
 
           if [ -z "$APKSIGNER" ] || [ ! -x "$APKSIGNER" ]; then
-            echo "::error::Android apksigner could not be found; refusing to publish an unverified update."
+            echo "::error::Android apksigner was not found on PATH or under the configured Android SDK build-tools directory."
+            echo "::error::Refusing to publish an APK without signature verification."
             exit 1
           fi
           echo "Using apksigner: $APKSIGNER"
