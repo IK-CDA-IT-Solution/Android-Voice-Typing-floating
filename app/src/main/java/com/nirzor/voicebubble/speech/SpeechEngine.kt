@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -45,6 +46,10 @@ class SpeechEngine(private val context: Context) {
     private var hasRetriedBusy = false
     private var hasRetriedOnline = false
     private var hasRetriedOnDevice = false
+    private val onlineNetworkCircuitBreaker = SpeechNetworkCircuitBreaker(
+        failureThreshold = 2,
+        cooldownMillis = 30_000L
+    )
     private var toneGenerator: ToneGenerator? = null
     private var vibrator: Vibrator? = null
 
@@ -121,6 +126,17 @@ class SpeechEngine(private val context: Context) {
             return
         }
 
+        val circuitOpen = onlineNetworkCircuitBreaker.isOpen(SystemClock.elapsedRealtime())
+        if (circuitOpen && !onDeviceRecognizerAvailable) {
+            // With no local provider available, fail fast during the cooldown rather than
+            // repeatedly submitting requests to a provider that has just failed twice.
+            val errorMsg = context.getString(R.string.speech_err_network_cooldown)
+            stateMachine.moveToError(errorMsg, SpeechRecognizer.ERROR_NETWORK)
+            onErrorOccurred?.invoke(errorMsg, SpeechRecognizer.ERROR_NETWORK)
+            scheduleErrorReset()
+            return
+        }
+
         if (!stateMachine.startListening()) return
 
         hasRetriedBusy = false
@@ -139,8 +155,14 @@ class SpeechEngine(private val context: Context) {
             onFinalResult = onFinalResult,
             onErrorOccurred = onErrorOccurred,
             isRetry = false,
-            forceOnDevice = !defaultRecognizerAvailable
+            forceOnDevice = !defaultRecognizerAvailable || (circuitOpen && onDeviceRecognizerAvailable)
         )
+        if (circuitOpen && onDeviceRecognizerAvailable && defaultRecognizerAvailable) {
+            onErrorOccurred?.invoke(
+                context.getString(R.string.speech_retrying_offline),
+                SpeechRecognizer.ERROR_NETWORK
+            )
+        }
     }
 
     private fun scheduleRecognizerStart(
@@ -292,9 +314,18 @@ class SpeechEngine(private val context: Context) {
                                     error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT ||
                                     error == SpeechRecognizer.ERROR_SERVER
 
-                            // A brief online retry recovers transient Speech Services failures.
-                            // If it fails again, try the on-device recognizer when Android exposes one.
-                            if (!forceOnDevice && isNetworkFailure && !hasRetriedOnline) {
+                            // Count only failures from the OS/provider's online speech path.
+                            // Two consecutive network/server failures open a short circuit.
+                            val circuitOpenNow = if (!forceOnDevice && isNetworkFailure) {
+                                onlineNetworkCircuitBreaker.recordNetworkFailure(
+                                    SystemClock.elapsedRealtime()
+                                )
+                            } else {
+                                false
+                            }
+
+                            // If the circuit is still closed, retry online once for a transient fault.
+                            if (!forceOnDevice && isNetworkFailure && !circuitOpenNow && !hasRetriedOnline) {
                                 hasRetriedOnline = true
                                 Log.w(TAG, "Speech service network failure; retrying online once")
                                 invalidatePendingStart()
@@ -317,6 +348,8 @@ class SpeechEngine(private val context: Context) {
                                 return
                             }
 
+                            // If the circuit opens or the retry has failed, use a compatible
+                            // on-device recognizer instead of continuing to hit the online path.
                             if (
                                 !forceOnDevice &&
                                 !hasRetriedOnDevice &&
@@ -324,7 +357,7 @@ class SpeechEngine(private val context: Context) {
                                 isOnDeviceRecognitionAvailable()
                             ) {
                                 hasRetriedOnDevice = true
-                                Log.w(TAG, "Online speech retry failed; switching to on-device recognition")
+                                Log.w(TAG, "Online speech path failed; switching to on-device recognition")
                                 invalidatePendingStart()
                                 cleanupRecognizer()
                                 onErrorOccurred?.invoke(
@@ -345,6 +378,12 @@ class SpeechEngine(private val context: Context) {
                                 return
                             }
 
+                            // A non-network result/error indicates that the online provider is
+                            // reachable again; clear the failure streak so the circuit can close.
+                            if (!forceOnDevice && !isNetworkFailure) {
+                                onlineNetworkCircuitBreaker.recordOnlineSuccess()
+                            }
+
                             val errorMsg = if (forceOnDevice && isNetworkFailure) {
                                 context.getString(R.string.speech_err_offline_unavailable)
                             } else {
@@ -360,6 +399,9 @@ class SpeechEngine(private val context: Context) {
 
                         override fun onResults(results: Bundle?) {
                             if (requestId != startRequestId) return
+                            if (!forceOnDevice) {
+                                onlineNetworkCircuitBreaker.recordOnlineSuccess()
+                            }
                             val duration = System.currentTimeMillis() - startTimeMs
                             val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                             val text = matches?.firstOrNull()?.trim() ?: ""
