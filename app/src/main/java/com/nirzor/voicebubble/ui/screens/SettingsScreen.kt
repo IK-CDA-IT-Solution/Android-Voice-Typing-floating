@@ -340,6 +340,8 @@ fun SettingsScreen(
                     }
 
                     is UpdateStatus.RecoveringInstall -> {
+                        var confirmCancel by remember(currentStatus.sessionId) { mutableStateOf(false) }
+                        var cancelUnconfirmed by remember(currentStatus.sessionId) { mutableStateOf(false) }
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(
                                 text = "আগের ইনস্টলেশন সেশন সংরক্ষিত আছে। Android installer-এর ফলাফলের অপেক্ষা করছি; নতুন ইনস্টলেশন শুরু করা হয়নি।",
@@ -348,6 +350,28 @@ fun SettingsScreen(
                             OutlinedButton(onClick = { updateManager.retry() }) {
                                 Text("ইনস্টলেশনের অবস্থা আবার যাচাই করুন")
                             }
+                            TextButton(onClick = { confirmCancel = true }) {
+                                Text("Pending install বাতিল করে retry করুন")
+                            }
+                            if (cancelUnconfirmed) {
+                                Text("বাতিল হওয়া নিশ্চিত হয়নি; আগের সেশন সংরক্ষিত আছে। আবার অবস্থা যাচাই বা বাতিলের চেষ্টা করতে পারেন।")
+                            }
+                        }
+                        if (confirmCancel) {
+                            AlertDialog(
+                                onDismissRequest = { confirmCancel = false },
+                                title = { Text("চলমান ইনস্টলেশন বাতিল করবেন?") },
+                                text = { Text("এতে আগের pending ইনস্টলেশনটি থামানোর চেষ্টা করা হবে। বাতিল হওয়া নিশ্চিত হলেই নতুন করে আপডেট চেষ্টা করতে পারবেন।") },
+                                confirmButton = {
+                                    TextButton(onClick = {
+                                        confirmCancel = false
+                                        cancelUnconfirmed = !updateManager.cancelPendingInstallForRetry(currentStatus.sessionId)
+                                    }) { Text("ইনস্টলেশন বাতিল করুন") }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { confirmCancel = false }) { Text("অপেক্ষা করুন") }
+                                }
+                            )
                         }
                     }
 

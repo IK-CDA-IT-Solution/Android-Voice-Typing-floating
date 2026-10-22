@@ -372,6 +372,38 @@ class UpdateManager(private val context: Context) {
         }
     }
 
+    /** Only call after the user explicitly confirms stopping the pending installation. */
+    fun cancelPendingInstallForRetry(sessionId: Int): Boolean {
+        val pending = _status.value as? UpdateStatus.RecoveringInstall ?: return false
+        if (pending.sessionId != sessionId || pending.sessionId < 0 ||
+            pending.sessionId != updatePrefs.getInt(KEY_PENDING_SESSION_ID, -1)) return false
+        val cancellation = tryCancelConfirmedPendingSession(
+            sessionExists = {
+                context.packageManager.packageInstaller.mySessions.any { it.sessionId == pending.sessionId }
+            },
+            abandon = { context.packageManager.packageInstaller.abandonSession(pending.sessionId) }
+        )
+        when (cancellation) {
+            PendingInstallCancellation.ALREADY_MISSING -> {
+                recoverInterruptedUpdate()
+                return _status.value !is UpdateStatus.RecoveringInstall
+            }
+            PendingInstallCancellation.UNCONFIRMED -> {
+                preservePendingRecovery(pending.sessionId)
+                return false
+            }
+            PendingInstallCancellation.CONFIRMED_CANCELLED -> Unit
+        }
+        clearPendingInstall()
+        cachedApkFile = null
+        verifiedApkInfo = null
+        verifiedApkSha256 = null
+        File(context.cacheDir, "voicebubble_update.apk").delete()
+        finishOperation()
+        _status.value = UpdateStatus.Error("আগের ইনস্টলেশন সেশনটি বাতিল হয়েছে। আপডেটের জন্য আবার চেষ্টা করুন।")
+        return true
+    }
+
     private fun checkViaHeadRedirect(): UpdateInfo? {
         return try {
             val headClient = OkHttpClient.Builder()

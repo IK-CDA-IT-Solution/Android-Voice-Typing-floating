@@ -12,7 +12,19 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-class SecureKeyManager(context: Context) {
+class SecureKeyManager private constructor(
+    context: Context,
+    private val secretKeyProvider: () -> SecretKey
+) {
+
+    constructor(context: Context) : this(context, { SecureKeyManager.createSecretKey() })
+
+    // Injectable only for unit tests so both production catch paths can be exercised safely.
+    internal constructor(
+        context: Context,
+        secretKeyProvider: () -> SecretKey,
+        @Suppress("UNUSED_PARAMETER") testHook: Unit
+    ) : this(context, secretKeyProvider)
 
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -26,6 +38,29 @@ class SecureKeyManager(context: Context) {
         private const val AES_GCM_TRANSFORMATION = "AES/GCM/NoPadding"
         private const val GCM_TAG_LENGTH = 128
 
+        private fun createSecretKey(): SecretKey {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            if (!keyStore.containsAlias(KEY_ALIAS)) {
+                val keyGenerator = KeyGenerator.getInstance(
+                    KeyProperties.KEY_ALGORITHM_AES,
+                    ANDROID_KEYSTORE
+                )
+                val keySpec = KeyGenParameterSpec.Builder(
+                    KEY_ALIAS,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+                )
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256)
+                    .build()
+
+                keyGenerator.init(keySpec)
+                keyGenerator.generateKey()
+            }
+            val secretKeyEntry = keyStore.getEntry(KEY_ALIAS, null) as KeyStore.SecretKeyEntry
+            return secretKeyEntry.secretKey
+        }
+
         @Volatile
         private var INSTANCE: SecureKeyManager? = null
 
@@ -38,36 +73,9 @@ class SecureKeyManager(context: Context) {
         }
     }
 
-    private fun getOrCreateSecretKey(): SecretKey {
-        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        if (!keyStore.containsAlias(KEY_ALIAS)) {
-            val keyGenerator = KeyGenerator.getInstance(
-                KeyProperties.KEY_ALGORITHM_AES,
-                ANDROID_KEYSTORE
-            )
-            val keySpec = KeyGenParameterSpec.Builder(
-                KEY_ALIAS,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-            )
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .build()
-
-            keyGenerator.init(keySpec)
-            keyGenerator.generateKey()
-        }
-        val secretKeyEntry = keyStore.getEntry(KEY_ALIAS, null) as KeyStore.SecretKeyEntry
-        return secretKeyEntry.secretKey
-    }
-
-    fun saveGeminiApiKey(apiKey: String) {
-        if (apiKey.isBlank()) {
-            clearGeminiApiKey()
-            return
-        }
+    private fun saveKey(apiKey: String) {
         try {
-            val secretKey = getOrCreateSecretKey()
+            val secretKey = secretKeyProvider()
             val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
             cipher.init(Cipher.ENCRYPT_MODE, secretKey)
             val iv = cipher.iv
@@ -80,17 +88,16 @@ class SecureKeyManager(context: Context) {
                 .putString(PREF_KEY_IV, ivB64)
                 .putString(PREF_KEY_CIPHERTEXT, cipherB64)
                 .apply()
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to encrypt Gemini API Key", e)
+        } catch (_: Exception) {
+            Log.e(TAG, "Secure key operation failed category=save")
         }
     }
 
-    fun getGeminiApiKey(): String? {
-        val ivB64 = prefs.getString(PREF_KEY_IV, null) ?: return null
-        val cipherB64 = prefs.getString(PREF_KEY_CIPHERTEXT, null) ?: return null
-
+    private fun readKey(): String? {
         return try {
-            val secretKey = getOrCreateSecretKey()
+            val ivB64 = prefs.getString(PREF_KEY_IV, null) ?: return null
+            val cipherB64 = prefs.getString(PREF_KEY_CIPHERTEXT, null) ?: return null
+            val secretKey = secretKeyProvider()
             val iv = Base64.decode(ivB64, Base64.NO_WRAP)
             val cipherBytes = Base64.decode(cipherB64, Base64.NO_WRAP)
 
@@ -100,11 +107,21 @@ class SecureKeyManager(context: Context) {
 
             val decryptedBytes = cipher.doFinal(cipherBytes)
             String(decryptedBytes, Charsets.UTF_8)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to decrypt Gemini API Key", e)
+        } catch (_: Exception) {
+            Log.e(TAG, "Secure key operation failed category=get")
             null
         }
     }
+
+    fun saveGeminiApiKey(apiKey: String) {
+        if (apiKey.isBlank()) {
+            clearGeminiApiKey()
+            return
+        }
+        saveKey(apiKey)
+    }
+
+    fun getGeminiApiKey(): String? = readKey()
 
     fun clearGeminiApiKey() {
         prefs.edit()

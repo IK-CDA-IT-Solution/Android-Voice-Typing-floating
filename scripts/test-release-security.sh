@@ -34,6 +34,13 @@ contains "trap 'exit 130' INT"
 contains "trap 'exit 143' TERM"
 contains 'umask 077'
 contains '-PunsignedRelease=true'
+contains 'cancel-in-progress: false'
+contains 'actual_commit="$(git rev-parse HEAD)"'
+contains 'Requested release tag already exists'
+contains 'target_commitish: ${{ github.sha }}'
+contains 'overwrite_files: false'
+contains 'Pinned Android aapt 35.0.0 was not found.'
+contains 'only 404 means absent'
 
 build_job="$(awk '
   /^  build-and-test:/ { capture = 1 }
@@ -62,6 +69,10 @@ privileged_jobs="$(awk '
   capture { print }
 ' "$WORKFLOW")"
 [[ -n "$privileged_jobs" ]] || fail 'sign-release job could not be found'
+if ! grep -Fq 'Trusted APK manifest version does not match' <<<"$privileged_jobs" ||
+  ! grep -Fq 'Unsigned APK package identity is incorrect.' <<<"$privileged_jobs"; then
+  fail 'fresh signing runner must independently verify APK package and requested version'
+fi
 if grep -E 'actions/checkout@|scripts/|gradlew|gradle ' <<<"$privileged_jobs" >/dev/null; then
   fail 'a privileged job checks out or executes repository code/Gradle'
 fi
@@ -89,9 +100,43 @@ if may_sign workflow_dispatch refs/heads/release/v1 true; then
   fail 'a non-main branch bypassed the signing gate'
 fi
 
-# Exercise the fail-closed fingerprint comparison for arbitrary valid tags,
-# including the historical v1.0.3 tag. This mirrors the inline comparison in
-# the isolated signing step; static checks above ensure it remains unconditional.
+# Exercise the actual trusted inline version comparison from the isolated
+# signing step, not a separate test-only model. The pre-signing step cannot run
+# repository scripts, so extract the bounded inline block and execute that code.
+version_check="$ROOT_DIR/.release-version-check.$$"
+trap 'rm -f -- "$version_check"' EXIT
+awk '
+  /# BEGIN RELEASE VERSION MONOTONICITY CHECK / { if (found) exit 2; found = 1; printing = 1; next }
+  /# END RELEASE VERSION MONOTONICITY CHECK/ { printing = 0; ended = 1; next }
+  printing { sub(/^          /, ""); print }
+  END { if (!found || !ended) exit 1 }
+' "$WORKFLOW" > "$version_check" || fail 'could not extract the trusted inline version comparison block'
+[[ -s "$version_check" ]] || fail 'extracted trusted inline version comparison is empty'
+
+version_check_accepts() {
+  local requested=$1 published=$2
+  REQUESTED_TAG="$requested" previous_tag="$published" bash "$version_check" >/dev/null 2>&1
+}
+version_check_accepts v1.0.8 v1.0.7 || fail 'greater patch version v1.0.8 was rejected after v1.0.7'
+version_check_accepts v1.1.0 v1.0.99 || fail 'minor boundary v1.1.0 was rejected after v1.0.99'
+version_check_accepts v2.0.0 v1.99.99 || fail 'major boundary v2.0.0 was rejected after v1.99.99'
+if version_check_accepts v1.0.3 v1.0.7; then
+  fail 'lower version v1.0.3 was accepted after v1.0.7'
+fi
+if version_check_accepts v1.0.7 v1.0.7; then
+  fail 'equal version v1.0.7 was accepted after v1.0.7'
+fi
+if version_check_accepts malformed v1.0.7 || version_check_accepts v1.0.8 malformed; then
+  fail 'malformed requested or published tag was accepted'
+fi
+if REQUESTED_TAG=v1.0.8 env -u REQUESTED_TAG previous_tag=v1.0.7 bash "$version_check" >/dev/null 2>&1; then
+  fail 'missing requested tag was accepted'
+fi
+if REQUESTED_TAG=v1.0.8 env -u previous_tag bash "$version_check" >/dev/null 2>&1; then
+  fail 'missing latest published tag was accepted'
+fi
+
+# Existing same-signer continuity remains fail-closed for arbitrary valid tags.
 valid_stable_tag() {
   [[ "$1" =~ ^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]]
 }

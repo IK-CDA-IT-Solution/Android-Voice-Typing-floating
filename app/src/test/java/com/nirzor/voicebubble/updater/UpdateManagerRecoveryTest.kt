@@ -22,7 +22,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
 
 @RunWith(RobolectricTestRunner::class)
-@Config(application = Application::class, sdk = [24, 26, 27, 28, 29, 34])
+@Config(application = Application::class, sdk = [24, 25, 26, 27, 28, 29, 34])
 class UpdateManagerRecoveryTest {
     private lateinit var context: Context
     private lateinit var installer: PackageInstaller
@@ -156,6 +156,73 @@ class UpdateManagerRecoveryTest {
         assertFalse(manager.isBusy.value)
         assertFalse(prefs.contains("pending_version_code"))
         assertFalse(prefs.contains("pending_session_id"))
+    }
+
+    @Test
+    @Config(sdk = [24, 25])
+    fun legacyUncommittedSessionCanBeExplicitlyCancelledAndClearedForRetry() {
+        val sessionId = createSession()
+        val unrelatedSession = createSession()
+        seedPending(sessionId)
+        cachedApk.writeText("pending-uncommitted")
+        val manager = UpdateManager(context)
+        manager.retry()
+        assertEquals(UpdateStatus.RecoveringInstall(sessionId), manager.status.value)
+        assertTrue(manager.isBusy.value)
+        assertTrue(cachedApk.exists())
+
+        assertTrue(manager.cancelPendingInstallForRetry(sessionId))
+        assertFalse(installer.mySessions.any { it.sessionId == sessionId })
+        assertTrue(installer.mySessions.any { it.sessionId == unrelatedSession })
+        assertFalse(manager.isBusy.value)
+        assertTrue((manager.status.value as UpdateStatus.Error).canRetry)
+        assertFalse(prefs.contains("pending_session_id"))
+        assertFalse(prefs.contains("pending_version_code"))
+        assertFalse(cachedApk.exists())
+        manager.reset()
+        assertEquals(UpdateStatus.Idle, manager.status.value)
+        assertFalse(manager.cancelPendingInstallForRetry(sessionId))
+    }
+
+    @Test
+    fun cancellationRejectsAnUnrelatedOrStaleConfirmedSessionId() {
+        val sessionId = createSession(sealed = true, committed = true)
+        val unrelatedSession = createSession()
+        seedPending(sessionId)
+        cachedApk.writeText("preserve")
+        val manager = UpdateManager(context)
+        assertFalse(manager.cancelPendingInstallForRetry(unrelatedSession))
+        assertPending(sessionId)
+        assertTrue(cachedApk.exists())
+        assertTrue(manager.isBusy.value)
+        assertTrue(installer.mySessions.any { it.sessionId == sessionId })
+        assertTrue(installer.mySessions.any { it.sessionId == unrelatedSession })
+    }
+
+    @Test
+    @Config(sdk = [24, 25])
+    @Suppress("DEPRECATION")
+    fun legacyPendingCommitIsPreservedUntilMatchingSuccessfulInstallerCallback() {
+        val sessionId = createSession()
+        seedPending(sessionId)
+        val manager = UpdateManager(context)
+        manager.retry()
+        assertEquals(UpdateStatus.RecoveringInstall(sessionId), manager.status.value)
+        assertTrue(manager.isBusy.value)
+        assertPending(sessionId)
+        val callbacks = shadowOf(installer).allSessionCallbacks.toList()
+        callbacks.forEach { it.onFinished(sessionId + 1000, true) }
+        assertEquals(UpdateStatus.RecoveringInstall(sessionId), manager.status.value)
+
+        val installed = context.packageManager.getPackageInfo(context.packageName, 0)
+        installed.versionCode = BuildConfig.VERSION_CODE + 1
+        installed.versionName = "confirmed-test-update"
+        shadowOf(context.packageManager).installPackage(installed)
+        callbacks.forEach { it.onFinished(sessionId, true) }
+        assertTrue(manager.status.value is UpdateStatus.Installed)
+        assertFalse(manager.isBusy.value)
+        assertFalse(prefs.contains("pending_session_id"))
+        assertFalse(prefs.contains("pending_version_code"))
     }
 
     private fun seedPending(sessionId: Int) {

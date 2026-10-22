@@ -9,6 +9,30 @@ import org.junit.Test
 
 class UpdateValidationTest {
     @Test
+    fun cancellationFailsClosedIfAbandonOrEitherLookupFailsOrSessionRemains() {
+        assertEquals(PendingInstallCancellation.UNCONFIRMED,
+            tryCancelConfirmedPendingSession({ throw SecurityException("lookup unavailable") }, { error("must not abandon") }))
+        assertEquals(PendingInstallCancellation.UNCONFIRMED,
+            tryCancelConfirmedPendingSession({ true }, { throw SecurityException("abandon rejected") }))
+        var lookups = 0
+        assertEquals(PendingInstallCancellation.UNCONFIRMED,
+            tryCancelConfirmedPendingSession({ if (++lookups == 1) true else throw IllegalStateException("lookup unavailable") }, {}))
+        assertEquals(PendingInstallCancellation.UNCONFIRMED,
+            tryCancelConfirmedPendingSession({ true }, {}))
+    }
+
+    @Test
+    fun cancellationOnlyConfirmsAfterSuccessfulAbandonAndConfirmedAbsence() {
+        var abandoned = false
+        assertEquals(PendingInstallCancellation.ALREADY_MISSING,
+            tryCancelConfirmedPendingSession({ false }, { abandoned = true }))
+        assertFalse(abandoned)
+        assertEquals(PendingInstallCancellation.CONFIRMED_CANCELLED,
+            tryCancelConfirmedPendingSession({ !abandoned }, { abandoned = true }))
+        assertTrue(abandoned)
+    }
+
+    @Test
     fun recoveryPreservesUnknownAndPotentiallyLiveSessions() {
         assertEquals(
             InstallerRecoveryDecision.PRESERVE_SESSION,

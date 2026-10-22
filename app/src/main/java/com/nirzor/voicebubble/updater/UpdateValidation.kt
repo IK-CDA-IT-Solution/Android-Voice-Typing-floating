@@ -21,6 +21,23 @@ internal fun installerRecoveryDecision(
     else -> InstallerRecoveryDecision.PRESERVE_SESSION
 }
 
+internal enum class PendingInstallCancellation { CONFIRMED_CANCELLED, ALREADY_MISSING, UNCONFIRMED }
+
+/** Called only after explicit user confirmation; uncertainty never unlocks a competing install. */
+internal fun tryCancelConfirmedPendingSession(
+    sessionExists: () -> Boolean,
+    abandon: () -> Unit
+): PendingInstallCancellation = try {
+    if (!sessionExists()) PendingInstallCancellation.ALREADY_MISSING
+    else {
+        abandon()
+        if (sessionExists()) PendingInstallCancellation.UNCONFIRMED
+        else PendingInstallCancellation.CONFIRMED_CANCELLED
+    }
+} catch (_: Exception) {
+    PendingInstallCancellation.UNCONFIRMED
+}
+
 /** Parse a sha256sum-style response, accepting either a bare digest or one filename. */
 internal fun parseSha256Checksum(payload: String?): String? {
     val value = payload?.trim()?.takeIf { it.isNotEmpty() } ?: return null
