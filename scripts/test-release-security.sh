@@ -25,6 +25,11 @@ contains "github.ref == 'refs/heads/main'"
 contains "vars.RELEASE_SIGNING_ENABLED == 'true'"
 contains 'name: release-signing'
 contains 'if [[ "$new_cert" != "$PREVIOUS_CERT" ]]; then'
+contains 'confirm_signing_key_migration:'
+contains 'default: false'
+contains 'ALLOW_SIGNING_KEY_MIGRATION: ${{ inputs.confirm_signing_key_migration }}'
+contains 'if [[ "$ALLOW_SIGNING_KEY_MIGRATION" != "true" ]]; then'
+contains 'One-run signing-key migration explicitly approved.'
 contains 'releases/latest'
 contains 'voicebubble.apk'
 contains 'mktemp -d "$RUNNER_TEMP/release-keystore.XXXXXX"'
@@ -158,5 +163,19 @@ done
 if compare_certificates v1.0.3 "$matching_cert" invalid; then
   fail 'invalid previous fingerprint was not rejected'
 fi
+
+# The key migration must be an explicit per-run opt-in; default and ordinary
+# releases must preserve strict same-signer continuity.
+migration_may_accept() {
+  local candidate=$1 previous=$2 explicitly_approved=$3
+  [[ "$candidate" == "$previous" ]] || [[ "$explicitly_approved" == true ]]
+}
+migration_may_accept "$matching_cert" "$matching_cert" false ||
+  fail 'matching signer was rejected without migration approval'
+if migration_may_accept "$other_cert" "$matching_cert" false; then
+  fail 'mismatched signer was accepted without explicit migration approval'
+fi
+migration_may_accept "$other_cert" "$matching_cert" true ||
+  fail 'explicitly approved initial migration was rejected'
 
 printf 'Release security regression tests passed.\n'
