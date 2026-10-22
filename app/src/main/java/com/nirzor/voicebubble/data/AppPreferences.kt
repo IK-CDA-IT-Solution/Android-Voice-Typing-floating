@@ -29,6 +29,8 @@ object SupportedLanguages {
     fun getLanguageByCode(code: String): VoiceLanguage {
         return languages.find { it.code == code } ?: languages[0]
     }
+}
+
 enum class PolishStyle(val key: String, val title: String, val description: String) {
     STRICT_GRAMMAR("strict_grammar", "Strict Grammar", "যথাযথ ব্যাকরণ ও প্রমিত লিখিত রূপ"),
     CASUAL_MESSAGING("casual_messaging", "Casual Messaging", "বন্ধুত্বপূর্ণ ও অনানুষ্ঠানিক মেসেজিং রূপ"),
