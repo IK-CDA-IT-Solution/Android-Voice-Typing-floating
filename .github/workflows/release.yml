@@ -12,6 +12,11 @@ on:
         description: 'Stable release version tag (for example, v1.2.3)'
         required: true
         type: string
+      confirm_signing_key_migration:
+        description: 'One-run owner approval to accept the release-signing Environment key if it differs from the currently published APK. Use only for the initial key migration.'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -323,6 +328,7 @@ jobs:
           TAG_NAME: ${{ needs.build-and-test.outputs.tag_name }}
           PREVIOUS_TAG: ${{ steps.previous.outputs.PREVIOUS_TAG }}
           PREVIOUS_CERT: ${{ steps.previous.outputs.PREVIOUS_CERT }}
+          ALLOW_SIGNING_KEY_MIGRATION: ${{ inputs.confirm_signing_key_migration }}
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -389,8 +395,15 @@ jobs:
             exit 1
           fi
           if [[ "$new_cert" != "$PREVIOUS_CERT" ]]; then
-            echo "::error::New APK signing certificate does not match the latest published APK ($PREVIOUS_TAG); refusing to sign or publish."
-            exit 1
+            if [[ "$ALLOW_SIGNING_KEY_MIGRATION" != "true" ]]; then
+              echo "::error::New APK signing certificate does not match the latest published APK ($PREVIOUS_TAG); refusing to sign or publish."
+              echo "::error::For a deliberate one-run key migration, re-dispatch from main with confirm_signing_key_migration=true after confirming the new keystore is intended."
+              exit 1
+            fi
+            echo "::warning::One-run signing-key migration explicitly approved. The new APK will establish the signing certificate for subsequent releases."
+            echo "::notice::New signing certificate SHA-256: $new_cert"
+          else
+            echo "Signing certificate matches the latest published release ($PREVIOUS_TAG)."
           fi
 
           artifact_dir="$RUNNER_TEMP/signed-release-artifacts"
