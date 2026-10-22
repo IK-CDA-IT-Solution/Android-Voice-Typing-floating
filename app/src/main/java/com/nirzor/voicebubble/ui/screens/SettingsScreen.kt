@@ -139,6 +139,7 @@ fun SettingsScreen(
     // Self Updater State
     val updateManager = remember { UpdateManager.getInstance(context) }
     val updateStatus by updateManager.status.collectAsState()
+    val updateBusy by updateManager.isBusy.collectAsState()
     var showUnknownSourcesDialog by remember { mutableStateOf(false) }
     var pendingUpdateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
     val unknownSourcesSettingsLauncher = rememberLauncherForActivityResult(
@@ -196,7 +197,7 @@ fun SettingsScreen(
                         onClick = {
                             updateManager.checkForUpdates(isAutoCheck = false)
                         },
-                        enabled = updateStatus !is UpdateStatus.Checking && updateStatus !is UpdateStatus.Downloading,
+                        enabled = !updateBusy,
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.testTag("check_update_btn")
                     ) {
@@ -274,6 +275,7 @@ fun SettingsScreen(
                                             updateManager.startDownload(info)
                                         }
                                     },
+                                    enabled = !updateBusy,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -321,7 +323,8 @@ fun SettingsScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Button(
-                                onClick = { updateManager.installApk(currentStatus.apkFile) }
+                                onClick = { updateManager.installApk(currentStatus.apkFile) },
+                                enabled = !updateBusy
                             ) {
                                 Text(text = stringResource(R.string.updater_install_btn))
                             }
@@ -333,6 +336,42 @@ fun SettingsScreen(
                             CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(text = "ইনস্টলেশন শুরু হয়েছে...", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+
+                    is UpdateStatus.RecoveringInstall -> {
+                        var confirmCancel by remember(currentStatus.sessionId) { mutableStateOf(false) }
+                        var cancelUnconfirmed by remember(currentStatus.sessionId) { mutableStateOf(false) }
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "আগের ইনস্টলেশন সেশন সংরক্ষিত আছে। Android installer-এর ফলাফলের অপেক্ষা করছি; নতুন ইনস্টলেশন শুরু করা হয়নি।",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            OutlinedButton(onClick = { updateManager.retry() }) {
+                                Text("ইনস্টলেশনের অবস্থা আবার যাচাই করুন")
+                            }
+                            TextButton(onClick = { confirmCancel = true }) {
+                                Text("Pending install বাতিল করে retry করুন")
+                            }
+                            if (cancelUnconfirmed) {
+                                Text("বাতিল হওয়া নিশ্চিত হয়নি; আগের সেশন সংরক্ষিত আছে। আবার অবস্থা যাচাই বা বাতিলের চেষ্টা করতে পারেন।")
+                            }
+                        }
+                        if (confirmCancel) {
+                            AlertDialog(
+                                onDismissRequest = { confirmCancel = false },
+                                title = { Text("চলমান ইনস্টলেশন বাতিল করবেন?") },
+                                text = { Text("এতে আগের pending ইনস্টলেশনটি থামানোর চেষ্টা করা হবে। বাতিল হওয়া নিশ্চিত হলেই নতুন করে আপডেট চেষ্টা করতে পারবেন।") },
+                                confirmButton = {
+                                    TextButton(onClick = {
+                                        confirmCancel = false
+                                        cancelUnconfirmed = !updateManager.cancelPendingInstallForRetry(currentStatus.sessionId)
+                                    }) { Text("ইনস্টলেশন বাতিল করুন") }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { confirmCancel = false }) { Text("অপেক্ষা করুন") }
+                                }
+                            )
                         }
                     }
 
@@ -358,7 +397,8 @@ fun SettingsScreen(
                             }
                             if (currentStatus.canRetry) {
                                 OutlinedButton(
-                                    onClick = { updateManager.checkForUpdates(false) },
+                                    onClick = { updateManager.retry() },
+                                    enabled = !updateBusy,
                                     modifier = Modifier.size(width = 140.dp, height = 36.dp)
                                 ) {
                                     Text(text = stringResource(R.string.updater_retry_btn), fontSize = 11.sp)
@@ -473,9 +513,27 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
-                        KeyTestState.NETWORK_ERROR -> {
+                        KeyTestState.AUTH_ERROR,
+                        KeyTestState.PERMISSION_ERROR,
+                        KeyTestState.MODEL_ERROR,
+                        KeyTestState.QUOTA_ERROR,
+                        KeyTestState.SERVER_ERROR,
+                        KeyTestState.REQUEST_ERROR,
+                        KeyTestState.NETWORK_ERROR,
+                        KeyTestState.TIMEOUT,
+                        KeyTestState.UNKNOWN_ERROR -> {
                             Text(
-                                text = stringResource(R.string.gemini_test_network_error),
+                                text = stringResource(when (testKeyState) {
+                                    KeyTestState.AUTH_ERROR -> R.string.gemini_test_auth_error
+                                    KeyTestState.PERMISSION_ERROR -> R.string.gemini_test_permission_error
+                                    KeyTestState.MODEL_ERROR -> R.string.gemini_test_model_error
+                                    KeyTestState.QUOTA_ERROR -> R.string.gemini_test_quota_error
+                                    KeyTestState.SERVER_ERROR -> R.string.gemini_test_server_error
+                                    KeyTestState.REQUEST_ERROR -> R.string.gemini_test_request_error
+                                    KeyTestState.TIMEOUT -> R.string.gemini_test_timeout
+                                    KeyTestState.NETWORK_ERROR -> R.string.gemini_test_network_error
+                                    else -> R.string.gemini_test_unknown_error
+                                }),
                                 color = Color(0xFFD97706),
                                 fontWeight = FontWeight.Bold,
                                 style = MaterialTheme.typography.bodySmall

@@ -106,6 +106,7 @@ class FloatingBubbleService : Service() {
     private var touchSlop = 16
     private var isDragging = false
     private var isOverRemoveTarget = false
+    private var latestPartialTranscript = ""
 
     companion object {
         const val ACTION_START = "com.nirzor.voicebubble.ACTION_START"
@@ -601,8 +602,7 @@ class FloatingBubbleService : Service() {
             is BubbleState.Idle -> startListeningSession()
             is BubbleState.Listening -> speechEngine.stopSession()
             is BubbleState.Error, is BubbleState.Done -> {
-                // A new tap should recover immediately after an error or previous result.
-                speechEngine.stateMachine.resetToIdle()
+                // Let SpeechEngine check for update/busy rejection before it resets the old result.
                 startListeningSession()
             }
             else -> Log.d(TAG, "Tap ignored while recognition is active: $currentState")
@@ -625,12 +625,12 @@ class FloatingBubbleService : Service() {
     private fun startListeningSession() {
         cancelAutoDismiss()
         copiedBadge?.visibility = View.GONE
-        previewPill?.visibility = View.GONE
         speechEngine.startSession(
             languageCode = appPreferences.selectedLanguage.value,
             playTone = appPreferences.soundFeedback.value,
             enableHaptic = appPreferences.hapticFeedback.value,
             onPartialResult = { partial ->
+                latestPartialTranscript = partial
                 mainHandler.post {
                     previewPill?.visibility = View.VISIBLE
                     previewPillText?.text = partial
@@ -642,11 +642,20 @@ class FloatingBubbleService : Service() {
             onErrorOccurred = { errorMsg, _ ->
                 mainHandler.post {
                     previewPill?.visibility = View.VISIBLE
-                    previewPillText?.text = errorMsg
-                    scheduleAutoDismiss()
+                    previewPillText?.maxLines = 5
+                    previewPillText?.text = if (latestPartialTranscript.isBlank()) {
+                        errorMsg
+                    } else {
+                        "${latestPartialTranscript.lineSequence().first().take(80)}\n$errorMsg"
+                    }
                 }
             }
         )
+        if (speechEngine.speechState.value is BubbleState.Listening) {
+            latestPartialTranscript = ""
+            previewPill?.visibility = View.GONE
+            previewPillText?.maxLines = 2
+        }
     }
 
     private fun handleFinalSpeechResult(rawText: String, lang: String, durationMs: Long) {
@@ -762,6 +771,8 @@ class FloatingBubbleService : Service() {
                 pulseRing?.visibility = View.GONE
                 micIcon?.setImageResource(android.R.drawable.stat_notify_error)
                 bubbleCircle?.background = createBubbleBackground(Color.parseColor("#DC2626"))
+                // Schedule only after Error has become the displayed state; retain any draft for retry.
+                scheduleAutoDismiss()
             }
         }
     }
@@ -791,15 +802,36 @@ class FloatingBubbleService : Service() {
                 }
             }
         }
+        serviceScope.launch {
+            appPreferences.keepBubbleAlwaysOn.collect { keepAlwaysOn ->
+                mainHandler.post {
+                    if (keepAlwaysOn) {
+                        cancelAutoDismiss()
+                    } else {
+                        scheduleAutoDismiss()
+                    }
+                }
+            }
+        }
     }
 
     private fun scheduleAutoDismiss() {
-        if (appPreferences.keepBubbleAlwaysOn.value) return
         cancelAutoDismiss()
+        if (!shouldAutoDismissBubble(
+                keepAlwaysOn = appPreferences.keepBubbleAlwaysOn.value,
+                state = speechEngine.speechState.value,
+                retainedPartialDraft = latestPartialTranscript
+            )
+        ) return
         autoDismissJob = serviceScope.launch {
-            delay(15_000L) // 15 seconds idle timer
-            if (speechEngine.speechState.value is BubbleState.Idle) {
-                Log.d(TAG, "Auto-dismissing bubble after 15s idle")
+            delay(15_000L) // 15-second timeout for dismissible idle/empty-error states
+            if (shouldAutoDismissBubble(
+                    keepAlwaysOn = appPreferences.keepBubbleAlwaysOn.value,
+                    state = speechEngine.speechState.value,
+                    retainedPartialDraft = latestPartialTranscript
+                )
+            ) {
+                Log.d(TAG, "Auto-dismissing bubble after 15s in a dismissible state")
                 stopSelf()
             }
         }

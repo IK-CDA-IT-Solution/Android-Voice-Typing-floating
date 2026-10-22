@@ -116,9 +116,11 @@ fun HomeScreen(
     val testSpeechState by testSpeechEngine.speechState.collectAsState()
     val testRms = (testSpeechState as? BubbleState.Listening)?.rmsDb ?: 0f
     var inAppTranscription by remember { mutableStateOf("") }
+    var speechStatusMessage by remember { mutableStateOf("") }
     var justCopiedInApp by remember { mutableStateOf(false) }
 
     val isTestListening = testSpeechState is BubbleState.Listening
+    val isTestProcessing = testSpeechState is BubbleState.Processing
 
     DisposableEffect(Unit) {
         onDispose {
@@ -442,6 +444,14 @@ fun HomeScreen(
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
+                if (speechStatusMessage.isNotBlank()) {
+                    Text(
+                        text = speechStatusMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.testTag("speech_provider_status")
+                    )
+                }
 
                 // Action Bar
                 Row(
@@ -450,73 +460,84 @@ fun HomeScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Button(
+                        enabled = !isTestProcessing,
                         onClick = {
                             if (isTestListening) {
                                 testSpeechEngine.stopSession()
                             } else {
-                                inAppTranscription = ""
-                                justCopiedInApp = false
-                                testSpeechEngine.startSession(
-                                    languageCode = selectedLangCode,
-                                    playTone = prefs.soundFeedback.value,
-                                    enableHaptic = prefs.hapticFeedback.value,
-                                    onPartialResult = { partial ->
-                                        inAppTranscription = partial
-                                    },
-                                    onFinalResult = { rawResult, lang, durationMs ->
-                                        inAppTranscription = rawResult
-                                        justCopiedInApp = false
+                                val started = startTestPadSessionIfAccepted(
+                                    currentState = testSpeechEngine.speechState.value
+                                ) {
+                                    testSpeechEngine.startSession(
+                                        languageCode = selectedLangCode,
+                                        playTone = prefs.soundFeedback.value,
+                                        enableHaptic = prefs.hapticFeedback.value,
+                                        onPartialResult = { partial ->
+                                            inAppTranscription = partial
+                                            speechStatusMessage = ""
+                                        },
+                                        onFinalResult = { rawResult, lang, durationMs ->
+                                            inAppTranscription = rawResult
+                                            speechStatusMessage = ""
+                                            justCopiedInApp = false
 
-                                        scope.launch {
-                                            val aiEnabled = prefs.aiPolishEnabled.value
-                                            val polished = if (aiEnabled && rawResult.isNotBlank()) {
-                                                inAppTranscription = "$rawResult\n\n${context.getString(R.string.test_pad_polishing_indicator)}"
-                                                GeminiApiClient.polishText(context, rawResult)
-                                            } else {
-                                                null
-                                            }
+                                            scope.launch {
+                                                val aiEnabled = prefs.aiPolishEnabled.value
+                                                val polished = if (aiEnabled && rawResult.isNotBlank()) {
+                                                    inAppTranscription = "$rawResult\n\n${context.getString(R.string.test_pad_polishing_indicator)}"
+                                                    GeminiApiClient.polishText(context, rawResult)
+                                                } else {
+                                                    null
+                                                }
 
-                                            val finalText = (polished ?: rawResult).trim()
-                                            inAppTranscription = finalText
-                                            // Mark the in-app recognizer as complete so the next tap can start a new session.
-                                            testSpeechEngine.stateMachine.moveToDone(
-                                                rawResult,
-                                                polished,
-                                                prefs.autoCopy.value && finalText.isNotBlank()
-                                            )
-
-                                            if (finalText.isNotBlank()) {
-                                                UndoRedoManager.recordInput(context, finalText)
-                                            }
-
-                                            if (prefs.autoCopy.value && finalText.isNotBlank()) {
-                                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                                val clip = ClipData.newPlainText("Voice Transcription", finalText)
-                                                clipboard.setPrimaryClip(clip)
-                                                justCopiedInApp = true
-                                                Toast.makeText(context, R.string.copied_toast, Toast.LENGTH_SHORT).show()
-                                            }
-
-                                            try {
-                                                repo.insert(
-                                                    VoiceHistoryEntity(
-                                                        text = finalText,
-                                                        language = lang,
-                                                        durationMs = durationMs,
-                                                        rawText = rawResult,
-                                                        polishedText = polished,
-                                                        createdAt = System.currentTimeMillis()
-                                                    )
+                                                val finalText = (polished ?: rawResult).trim()
+                                                inAppTranscription = finalText
+                                                // Mark the in-app recognizer as complete so the next tap can start a new session.
+                                                testSpeechEngine.stateMachine.moveToDone(
+                                                    rawResult,
+                                                    polished,
+                                                    prefs.autoCopy.value && finalText.isNotBlank()
                                                 )
-                                            } catch (e: Exception) {
-                                                // Ignore
+
+                                                if (finalText.isNotBlank()) {
+                                                    UndoRedoManager.recordInput(context, finalText)
+                                                }
+
+                                                if (prefs.autoCopy.value && finalText.isNotBlank()) {
+                                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                                    val clip = ClipData.newPlainText("Voice Transcription", finalText)
+                                                    clipboard.setPrimaryClip(clip)
+                                                    justCopiedInApp = true
+                                                    Toast.makeText(context, R.string.copied_toast, Toast.LENGTH_SHORT).show()
+                                                }
+
+                                                try {
+                                                    repo.insert(
+                                                        VoiceHistoryEntity(
+                                                            text = finalText,
+                                                            language = lang,
+                                                            durationMs = durationMs,
+                                                            rawText = rawResult,
+                                                            polishedText = polished,
+                                                            createdAt = System.currentTimeMillis()
+                                                        )
+                                                    )
+                                                } catch (e: Exception) {
+                                                    // Ignore
+                                                }
                                             }
+                                        },
+                                        onErrorOccurred = { errorMsg, _ ->
+                                            speechStatusMessage = errorMsg
                                         }
-                                    },
-                                    onErrorOccurred = { errorMsg, _ ->
-                                        inAppTranscription = errorMsg
-                                    }
-                                )
+                                    )
+                                    testSpeechEngine.speechState.value
+                                }
+                                if (started) {
+                                    inAppTranscription = ""
+                                    speechStatusMessage = ""
+                                    justCopiedInApp = false
+                                }
                             }
                         },
                         colors = ButtonDefaults.buttonColors(
@@ -534,7 +555,11 @@ fun HomeScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (isTestListening) stringResource(R.string.test_pad_btn_stop) else stringResource(R.string.test_pad_btn_start),
+                            text = when {
+                                isTestListening -> stringResource(R.string.test_pad_btn_stop)
+                                isTestProcessing -> stringResource(R.string.bubble_state_processing)
+                                else -> stringResource(R.string.test_pad_btn_start)
+                            },
                             fontWeight = FontWeight.Bold
                         )
                     }

@@ -9,13 +9,23 @@ sealed interface BubbleState {
     data class Listening(val rmsDb: Float = 0f, val partialText: String = "") : BubbleState
     object Processing : BubbleState
     data class Done(val rawText: String, val polishedText: String?, val copied: Boolean = true) : BubbleState
-    data class Error(val message: String, val errorCode: Int) : BubbleState
+    data class Error(
+        val message: String,
+        val errorCode: Int,
+        val partialText: String = ""
+    ) : BubbleState
 }
 
 class BubbleStateMachine {
 
     private val _state = MutableStateFlow<BubbleState>(BubbleState.Idle)
     val state: StateFlow<BubbleState> = _state.asStateFlow()
+    private var latestPartialText: String = ""
+    val isSpeechSessionActive: Boolean
+        get() = when (_state.value) {
+            is BubbleState.Listening, BubbleState.Processing -> true
+            else -> false
+        }
 
     fun canAcceptTap(): Boolean {
         return _state.value is BubbleState.Idle
@@ -25,6 +35,7 @@ class BubbleStateMachine {
         if (_state.value !is BubbleState.Idle) {
             return false // Taps in non-IDLE states are ignored
         }
+        latestPartialText = ""
         _state.value = BubbleState.Listening(0f, "")
         return true
     }
@@ -37,7 +48,7 @@ class BubbleStateMachine {
         if (_state.value !is BubbleState.Listening && _state.value !is BubbleState.Processing) {
             return false
         }
-        _state.value = BubbleState.Listening(0f, "")
+        _state.value = BubbleState.Listening(0f, latestPartialText)
         return true
     }
 
@@ -51,6 +62,7 @@ class BubbleStateMachine {
     fun updatePartialText(partial: String) {
         val current = _state.value
         if (current is BubbleState.Listening) {
+            latestPartialText = partial
             _state.value = current.copy(partialText = partial)
         }
     }
@@ -66,16 +78,18 @@ class BubbleStateMachine {
     fun moveToDone(rawText: String, polishedText: String?, copied: Boolean = true): Boolean {
         if (_state.value is BubbleState.Processing || _state.value is BubbleState.Listening) {
             _state.value = BubbleState.Done(rawText, polishedText, copied)
+            latestPartialText = ""
             return true
         }
         return false
     }
 
     fun moveToError(message: String, errorCode: Int) {
-        _state.value = BubbleState.Error(message, errorCode)
+        _state.value = BubbleState.Error(message, errorCode, latestPartialText)
     }
 
     fun resetToIdle() {
+        latestPartialText = ""
         _state.value = BubbleState.Idle
     }
 }
