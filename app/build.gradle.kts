@@ -11,7 +11,7 @@ androidComponents {
   }
 }
 
-val propVersionName: String = (project.findProperty("versionName") as? String)?.takeIf { it.isNotBlank() } ?: "1.0.0"
+val propVersionName: String = (project.findProperty("versionName") as? String)?.takeIf { it.isNotBlank() } ?: "1.0.9"
 val cleanVersionName = propVersionName.removePrefix("v").trim()
 val versionParts = cleanVersionName.split(".").map { it.toIntOrNull() ?: 0 }
 val major = versionParts.getOrElse(0) { 1 }

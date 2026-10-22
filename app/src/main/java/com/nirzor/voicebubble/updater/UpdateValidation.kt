@@ -60,7 +60,7 @@ internal fun isTrustedReleaseAssetUrl(url: String): Boolean = try {
     val uri = URI(url)
     uri.scheme == "https" && uri.host.equals("github.com", ignoreCase = true) &&
         uri.userInfo == null && uri.port == -1 &&
-        uri.path.startsWith("/engrnirzorme02/NIRZOR-Voice-Typing-floating/releases/download/")
+        uri.path.startsWith("/engrnirzorme02/Android-Voice-Typing-floating/releases/download/")
 } catch (_: Exception) {
     false
 }

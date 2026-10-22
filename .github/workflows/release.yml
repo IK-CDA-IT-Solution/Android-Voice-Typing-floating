@@ -242,53 +242,82 @@ jobs:
           fi
 
           latest_json="$RUNNER_TEMP/latest-release.json"
-          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+          latest_status="$(curl --silent --show-error --location --proto '=https' --tlsv1.2 \
             -H 'Accept: application/vnd.github+json' \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H 'User-Agent: NIRZOR-Voice-Typing-release-workflow' \
-            "https://api.github.com/repos/$RELEASE_REPOSITORY/releases/latest" \
-            --output "$latest_json"
-          previous_tag="$(jq -er '.tag_name | strings' "$latest_json")"
-          if [[ ! "$previous_tag" =~ ^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]]; then
-            echo '::error::Latest published release tag is missing or not a stable version; refusing to sign.'
-            exit 1
-          fi
-          major=$((10#${BASH_REMATCH[1]}))
-          minor=$((10#${BASH_REMATCH[2]}))
-          patch=$((10#${BASH_REMATCH[3]}))
-          if (( major > 210000 || major * 10000 + minor * 100 + patch > 2100000000 )); then
-            echo '::error::Latest published release tag exceeds Android version-code limits.'
-            exit 1
-          fi
+            --output "$latest_json" --write-out '%{http_code}' \
+            "https://api.github.com/repos/$RELEASE_REPOSITORY/releases/latest")"
 
-          # BEGIN RELEASE VERSION MONOTONICITY CHECK (test extracts and executes this exact block)
-          version_code_for_tag() {
-            local tag=$1 major minor patch major_num minor_num patch_num code
-            [[ "$tag" =~ ^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]] || return 1
-            major="${BASH_REMATCH[1]}"
-            minor="${BASH_REMATCH[2]}"
-            patch="${BASH_REMATCH[3]}"
-            major_num=$((10#$major))
-            minor_num=$((10#$minor))
-            patch_num=$((10#$patch))
-            (( major_num <= 210000 )) || return 1
-            code=$((major_num * 10000 + minor_num * 100 + patch_num))
-            (( code <= 2100000000 )) || return 1
-            printf '%s' "$code"
-          }
-          requested_version_code="$(version_code_for_tag "${REQUESTED_TAG-}")" || {
-            echo '::error::Requested release tag is missing, malformed, or outside Android version-code limits; refusing to sign.'
-            exit 1
-          }
-          previous_version_code="$(version_code_for_tag "${previous_tag-}")" || {
-            echo '::error::Latest published release tag is missing, malformed, or outside Android version-code limits; refusing to sign.'
-            exit 1
-          }
-          if (( requested_version_code <= previous_version_code )); then
-            echo '::error::Requested versionCode must be strictly greater than the latest published release; equal-version rebuilds and downgrades are rejected.'
+          if [[ "$latest_status" == 200 ]]; then
+            has_previous="true"
+            previous_tag="$(jq -er '.tag_name | strings' "$latest_json")"
+            if [[ ! "$previous_tag" =~ ^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]]; then
+              echo '::error::Latest published release tag is missing or not a stable version; refusing to sign.'
+              exit 1
+            fi
+            major=$((10#${BASH_REMATCH[1]}))
+            minor=$((10#${BASH_REMATCH[2]}))
+            patch=$((10#${BASH_REMATCH[3]}))
+            if (( major > 210000 || major * 10000 + minor * 100 + patch > 2100000000 )); then
+              echo '::error::Latest published release tag exceeds Android version-code limits.'
+              exit 1
+            fi
+
+            # BEGIN RELEASE VERSION MONOTONICITY CHECK (test extracts and executes this exact block)
+            version_code_for_tag() {
+              local tag=$1 major minor patch major_num minor_num patch_num code
+              [[ "$tag" =~ ^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]] || return 1
+              major="${BASH_REMATCH[1]}"
+              minor="${BASH_REMATCH[2]}"
+              patch="${BASH_REMATCH[3]}"
+              major_num=$((10#$major))
+              minor_num=$((10#$minor))
+              patch_num=$((10#$patch))
+              (( major_num <= 210000 )) || return 1
+              code=$((major_num * 10000 + minor_num * 100 + patch_num))
+              (( code <= 2100000000 )) || return 1
+              printf '%s' "$code"
+            }
+            requested_version_code="$(version_code_for_tag "${REQUESTED_TAG-}")" || {
+              echo '::error::Requested release tag is missing, malformed, or outside Android version-code limits; refusing to sign.'
+              exit 1
+            }
+            previous_version_code="$(version_code_for_tag "${previous_tag-}")" || {
+              echo '::error::Latest published release tag is missing, malformed, or outside Android version-code limits; refusing to sign.'
+              exit 1
+            }
+            if (( requested_version_code <= previous_version_code )); then
+              echo '::error::Requested versionCode must be strictly greater than the latest published release; equal-version rebuilds and downgrades are rejected.'
+              exit 1
+            fi
+            # END RELEASE VERSION MONOTONICITY CHECK
+          elif [[ "$latest_status" == 404 ]]; then
+            echo "No existing releases found (HTTP 404, only 404 means absent); this is an initial bootstrap release."
+            has_previous="false"
+            previous_tag=""
+            version_code_for_tag() {
+              local tag=$1 major minor patch major_num minor_num patch_num code
+              [[ "$tag" =~ ^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]] || return 1
+              major="${BASH_REMATCH[1]}"
+              minor="${BASH_REMATCH[2]}"
+              patch="${BASH_REMATCH[3]}"
+              major_num=$((10#$major))
+              minor_num=$((10#$minor))
+              patch_num=$((10#$patch))
+              (( major_num <= 210000 )) || return 1
+              code=$((major_num * 10000 + minor_num * 100 + patch_num))
+              (( code <= 2100000000 )) || return 1
+              printf '%s' "$code"
+            }
+            requested_version_code="$(version_code_for_tag "${REQUESTED_TAG-}")" || {
+              echo '::error::Requested release tag is missing, malformed, or outside Android version-code limits; refusing to sign.'
+              exit 1
+            }
+          else
+            echo "::error::Could not query latest release (HTTP $latest_status); only 404 means absent."
             exit 1
           fi
-          # END RELEASE VERSION MONOTONICITY CHECK
 
           # Recheck on this fresh runner: repository build code cannot vouch for its own artifact.
           aapt="$ANDROID_HOME/build-tools/35.0.0/aapt"
@@ -306,26 +335,31 @@ jobs:
             exit 1
           }
 
-          previous_apk="$RUNNER_TEMP/previous-release.apk"
-          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
-            -H 'User-Agent: NIRZOR-Voice-Typing-release-workflow' \
-            "https://github.com/$RELEASE_REPOSITORY/releases/download/$previous_tag/voicebubble.apk" \
-            --output "$previous_apk"
-          verify_output="$("$apksigner" verify --print-certs "$previous_apk" 2>&1)" || {
-            echo '::error::Could not verify the latest published APK signature.'
-            printf '%s\n' "$verify_output" >&2
-            exit 1
-          }
-          previous_cert="$(printf '%s\n' "$verify_output" | awk '/certificate SHA-256 digest:/ { print $NF; exit }' | tr '[:upper:]' '[:lower:]')"
-          if [[ ! "$previous_cert" =~ ^[0-9a-f]{64}$ ]]; then
-            echo '::error::Latest published APK did not provide a valid SHA-256 signing-certificate fingerprint.'
-            exit 1
+          if [[ "$has_previous" == "true" ]]; then
+            previous_apk="$RUNNER_TEMP/previous-release.apk"
+            curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+              -H 'User-Agent: NIRZOR-Voice-Typing-release-workflow' \
+              "https://github.com/$RELEASE_REPOSITORY/releases/download/$previous_tag/voicebubble.apk" \
+              --output "$previous_apk"
+            verify_output="$("$apksigner" verify --print-certs "$previous_apk" 2>&1)" || {
+              echo '::error::Could not verify the latest published APK signature.'
+              printf '%s\n' "$verify_output" >&2
+              exit 1
+            }
+            previous_cert="$(printf '%s\n' "$verify_output" | awk '/certificate SHA-256 digest:/ { print $NF; exit }' | tr '[:upper:]' '[:lower:]')"
+            if [[ ! "$previous_cert" =~ ^[0-9a-f]{64}$ ]]; then
+              echo '::error::Latest published APK did not provide a valid SHA-256 signing-certificate fingerprint.'
+              exit 1
+            fi
+            printf 'HAS_PREVIOUS=true\nPREVIOUS_TAG=%s\nPREVIOUS_CERT=%s\n' "$previous_tag" "$previous_cert" >> "$GITHUB_OUTPUT"
+          else
+            printf 'HAS_PREVIOUS=false\nPREVIOUS_TAG=\nPREVIOUS_CERT=\n' >> "$GITHUB_OUTPUT"
           fi
-          printf 'PREVIOUS_TAG=%s\nPREVIOUS_CERT=%s\n' "$previous_tag" "$previous_cert" >> "$GITHUB_OUTPUT"
 
       - name: Sign and enforce signing-certificate continuity
         env:
           TAG_NAME: ${{ needs.build-and-test.outputs.tag_name }}
+          HAS_PREVIOUS: ${{ steps.previous.outputs.HAS_PREVIOUS }}
           PREVIOUS_TAG: ${{ steps.previous.outputs.PREVIOUS_TAG }}
           PREVIOUS_CERT: ${{ steps.previous.outputs.PREVIOUS_CERT }}
           ALLOW_SIGNING_KEY_MIGRATION: ${{ inputs.confirm_signing_key_migration }}
@@ -358,9 +392,11 @@ jobs:
             echo '::error::Requested release tag exceeds Android version-code limits.'
             exit 1
           fi
-          if [[ ! "$PREVIOUS_CERT" =~ ^[0-9a-f]{64}$ || ! "$PREVIOUS_TAG" =~ ^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]]; then
-            echo '::error::Previous release signing identity is unavailable or invalid; refusing to sign.'
-            exit 1
+          if [[ "$HAS_PREVIOUS" == "true" ]]; then
+            if [[ ! "$PREVIOUS_CERT" =~ ^[0-9a-f]{64}$ || ! "$PREVIOUS_TAG" =~ ^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]]; then
+              echo '::error::Previous release signing identity is unavailable or invalid; refusing to sign.'
+              exit 1
+            fi
           fi
 
           keystore_path="$key_dir/release.keystore"
@@ -394,16 +430,21 @@ jobs:
             echo '::error::New APK did not provide a valid SHA-256 signing-certificate fingerprint.'
             exit 1
           fi
-          if [[ "$new_cert" != "$PREVIOUS_CERT" ]]; then
-            if [[ "$ALLOW_SIGNING_KEY_MIGRATION" != "true" ]]; then
-              echo "::error::New APK signing certificate does not match the latest published APK ($PREVIOUS_TAG); refusing to sign or publish."
-              echo "::error::For a deliberate one-run key migration, re-dispatch from main with confirm_signing_key_migration=true after confirming the new keystore is intended."
-              exit 1
+          if [[ "$HAS_PREVIOUS" == "true" ]]; then
+            if [[ "$new_cert" != "$PREVIOUS_CERT" ]]; then
+              if [[ "$ALLOW_SIGNING_KEY_MIGRATION" != "true" ]]; then
+                echo "::error::New APK signing certificate does not match the latest published APK ($PREVIOUS_TAG); refusing to sign or publish."
+                echo "::error::For a deliberate one-run key migration, re-dispatch from main with confirm_signing_key_migration=true after confirming the new keystore is intended."
+                exit 1
+              fi
+              echo "::warning::One-run signing-key migration explicitly approved. The new APK will establish the signing certificate for subsequent releases."
+              echo "::notice::New signing certificate SHA-256: $new_cert"
+            else
+              echo "Signing certificate matches the latest published release ($PREVIOUS_TAG)."
             fi
-            echo "::warning::One-run signing-key migration explicitly approved. The new APK will establish the signing certificate for subsequent releases."
-            echo "::notice::New signing certificate SHA-256: $new_cert"
           else
-            echo "Signing certificate matches the latest published release ($PREVIOUS_TAG)."
+            echo "Initial release: establishing initial signing certificate for repository."
+            echo "::notice::Initial signing certificate SHA-256: $new_cert"
           fi
 
           artifact_dir="$RUNNER_TEMP/signed-release-artifacts"

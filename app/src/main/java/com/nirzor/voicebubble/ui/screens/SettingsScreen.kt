@@ -91,6 +91,7 @@ import com.nirzor.voicebubble.BuildConfig
 import com.nirzor.voicebubble.R
 import com.nirzor.voicebubble.VoiceBubbleApp
 import com.nirzor.voicebubble.data.BubbleThemes
+import com.nirzor.voicebubble.data.PolishStyle
 import com.nirzor.voicebubble.data.SecureKeyManager
 import com.nirzor.voicebubble.data.SupportedLanguages
 import com.nirzor.voicebubble.service.GeminiApiClient
@@ -124,6 +125,7 @@ fun SettingsScreen(
     val keepAlwaysOn by prefs.keepBubbleAlwaysOn.collectAsState()
     val startFromTile by prefs.startListeningFromTile.collectAsState()
     val aiPolishEnabled by prefs.aiPolishEnabled.collectAsState()
+    val polishStyle by prefs.polishStyle.collectAsState()
     val directGeminiAudio by prefs.directGeminiAudio.collectAsState()
     val retentionDays by prefs.historyRetentionDays.collectAsState()
 
@@ -288,15 +290,43 @@ fun SettingsScreen(
 
                     is UpdateStatus.Downloading -> {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                text = stringResource(R.string.updater_status_downloading, currentStatus.progressPercent),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.updater_status_downloading, currentStatus.progressPercent),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                if (currentStatus.speedBytesPerSec > 0) {
+                                    val speedStr = if (currentStatus.speedBytesPerSec >= 1024 * 1024) {
+                                        String.format(java.util.Locale.US, "%.1f MB/s", currentStatus.speedBytesPerSec / (1024f * 1024f))
+                                    } else {
+                                        String.format(java.util.Locale.US, "%d KB/s", currentStatus.speedBytesPerSec / 1024)
+                                    }
+                                    Text(
+                                        text = speedStr,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
                             LinearProgressIndicator(
                                 progress = { currentStatus.progressPercent / 100f },
                                 modifier = Modifier.fillMaxWidth()
                             )
+                            if (currentStatus.totalBytes > 0) {
+                                val downloadedMb = currentStatus.downloadedBytes / (1024f * 1024f)
+                                val totalMb = currentStatus.totalBytes / (1024f * 1024f)
+                                Text(
+                                    text = String.format(java.util.Locale.US, "%.1f MB / %.1f MB", downloadedMb, totalMb),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
 
@@ -422,6 +452,55 @@ fun SettingsScreen(
                     checked = aiPolishEnabled,
                     onCheckedChange = { prefs.setAiPolishEnabled(it) }
                 )
+
+                AnimatedVisibility(visible = aiPolishEnabled) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "পলিশিং স্টাইল (Polishing Style)",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            PolishStyle.entries.forEach { style ->
+                                val isSelected = polishStyle == style
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable { prefs.setPolishStyle(style) },
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                    border = BorderStroke(
+                                        width = if (isSelected) 1.5.dp else 0.5.dp,
+                                        color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent
+                                    )
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = style.displayName,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        Text(
+                            text = polishStyle.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
 
                 HorizontalDivider()
 

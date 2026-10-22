@@ -29,6 +29,14 @@ object SupportedLanguages {
     fun getLanguageByCode(code: String): VoiceLanguage {
         return languages.find { it.code == code } ?: languages[0]
     }
+enum class PolishStyle(val key: String, val title: String, val description: String) {
+    STRICT_GRAMMAR("strict_grammar", "Strict Grammar", "যথাযথ ব্যাকরণ ও প্রমিত লিখিত রূপ"),
+    CASUAL_MESSAGING("casual_messaging", "Casual Messaging", "বন্ধুত্বপূর্ণ ও অনানুষ্ঠানিক মেসেজিং রূপ"),
+    CODE_HYBRID("code_hybrid", "Code/English Hybrid", "টেকনিক্যাল শব্দ ও কোড/ইংরেজি অক্ষত রাখুন");
+
+    companion object {
+        fun fromKey(key: String): PolishStyle = entries.firstOrNull { it.key == key } ?: STRICT_GRAMMAR
+    }
 }
 
 class AppPreferences(context: Context) {
@@ -68,6 +76,11 @@ class AppPreferences(context: Context) {
 
     private val _aiPolishEnabled = MutableStateFlow(prefs.getBoolean(KEY_AI_POLISH, true))
     val aiPolishEnabled: StateFlow<Boolean> = _aiPolishEnabled.asStateFlow()
+
+    private val _polishStyle = MutableStateFlow(
+        PolishStyle.fromKey(prefs.getString(KEY_POLISH_STYLE, PolishStyle.STRICT_GRAMMAR.key) ?: PolishStyle.STRICT_GRAMMAR.key)
+    )
+    val polishStyle: StateFlow<PolishStyle> = _polishStyle.asStateFlow()
 
     private val _directGeminiAudio = MutableStateFlow(prefs.getBoolean(KEY_DIRECT_GEMINI_AUDIO, false))
     val directGeminiAudio: StateFlow<Boolean> = _directGeminiAudio.asStateFlow()
@@ -154,6 +167,11 @@ class AppPreferences(context: Context) {
         _aiPolishEnabled.value = enabled
     }
 
+    fun setPolishStyle(style: PolishStyle) {
+        prefs.edit().putString(KEY_POLISH_STYLE, style.key).apply()
+        _polishStyle.value = style
+    }
+
     fun setDirectGeminiAudio(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_DIRECT_GEMINI_AUDIO, enabled).apply()
         _directGeminiAudio.value = enabled
@@ -192,6 +210,7 @@ class AppPreferences(context: Context) {
         private const val KEY_KEEP_ALWAYS_ON = "key_keep_always_on"
         private const val KEY_START_FROM_TILE = "key_start_from_tile"
         private const val KEY_AI_POLISH = "key_ai_polish"
+        private const val KEY_POLISH_STYLE = "key_polish_style"
         private const val KEY_DIRECT_GEMINI_AUDIO = "key_direct_gemini_audio"
         private const val KEY_RETENTION_DAYS = "key_retention_days"
         private const val KEY_BUBBLE_X = "key_bubble_x"

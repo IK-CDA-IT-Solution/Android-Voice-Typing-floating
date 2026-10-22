@@ -45,7 +45,13 @@ sealed interface UpdateStatus {
     object Checking : UpdateStatus
     data class UpToDate(val currentVersion: String) : UpdateStatus
     data class UpdateAvailable(val info: UpdateInfo) : UpdateStatus
-    data class Downloading(val progressPercent: Int, val info: UpdateInfo) : UpdateStatus
+    data class Downloading(
+        val progressPercent: Int,
+        val info: UpdateInfo,
+        val downloadedBytes: Long = 0L,
+        val totalBytes: Long = 0L,
+        val speedBytesPerSec: Long = 0L
+    ) : UpdateStatus
     object Verifying : UpdateStatus
     data class ReadyToInstall(val apkFile: File) : UpdateStatus
     object Installing : UpdateStatus
@@ -101,7 +107,7 @@ class UpdateManager(private val context: Context) {
 
     companion object {
         private const val OWNER = "engrnirzorme02"
-        private const val REPO = "NIRZOR-Voice-Typing-floating"
+        private const val REPO = "Android-Voice-Typing-floating"
         private const val APK_NAME = "voicebubble.apk"
         private const val SHA_NAME = "voicebubble.apk.sha256"
         private const val KEY_PENDING_VERSION_CODE = "pending_version_code"
@@ -518,16 +524,32 @@ class UpdateManager(private val context: Context) {
                         FileOutputStream(apkFile).use { output ->
                             val buffer = ByteArray(8192)
                             var lastProgress = 0
+                            var lastSampleTime = System.currentTimeMillis()
+                            var bytesSampled = 0L
+                            var currentSpeed = 0L
                             while (true) {
                                 val bytesRead = input.read(buffer)
                                 if (bytesRead < 0) break
                                 output.write(buffer, 0, bytesRead)
                                 downloadedBytes += bytesRead
+                                val now = System.currentTimeMillis()
+                                val timeDelta = now - lastSampleTime
+                                if (timeDelta >= 400L) {
+                                    currentSpeed = ((downloadedBytes - bytesSampled) * 1000L) / timeDelta
+                                    lastSampleTime = now
+                                    bytesSampled = downloadedBytes
+                                }
                                 if (totalBytes > 0) {
                                     val progress = ((downloadedBytes * 100) / totalBytes).toInt().coerceIn(0, 100)
                                     if (progress != lastProgress) {
                                         lastProgress = progress
-                                        _status.value = UpdateStatus.Downloading(progress, info)
+                                        _status.value = UpdateStatus.Downloading(
+                                            progressPercent = progress,
+                                            info = info,
+                                            downloadedBytes = downloadedBytes,
+                                            totalBytes = totalBytes,
+                                            speedBytesPerSec = currentSpeed
+                                        )
                                     }
                                 }
                             }

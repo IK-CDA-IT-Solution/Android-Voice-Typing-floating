@@ -94,10 +94,10 @@ class UpdateValidationTest {
 
     @Test
     fun releaseAssetsMustComeFromCanonicalHttpsReleasePath() {
-        assertTrue(isTrustedReleaseAssetUrl("https://github.com/engrnirzorme02/NIRZOR-Voice-Typing-floating/releases/download/v1.2.3/voicebubble.apk"))
-        assertFalse(isTrustedReleaseAssetUrl("http://github.com/engrnirzorme02/NIRZOR-Voice-Typing-floating/releases/download/v1/a.apk"))
+        assertTrue(isTrustedReleaseAssetUrl("https://github.com/engrnirzorme02/Android-Voice-Typing-floating/releases/download/v1.2.3/voicebubble.apk"))
+        assertFalse(isTrustedReleaseAssetUrl("http://github.com/engrnirzorme02/Android-Voice-Typing-floating/releases/download/v1/a.apk"))
         assertFalse(isTrustedReleaseAssetUrl("https://example.com/a.apk"))
-        assertFalse(isTrustedReleaseAssetUrl("https://github.com.evil.example/engrnirzorme02/NIRZOR-Voice-Typing-floating/releases/download/v1/a.apk"))
+        assertFalse(isTrustedReleaseAssetUrl("https://github.com.evil.example/engrnirzorme02/Android-Voice-Typing-floating/releases/download/v1/a.apk"))
     }
 
     @Test

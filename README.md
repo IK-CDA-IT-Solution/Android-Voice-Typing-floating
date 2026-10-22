@@ -45,8 +45,8 @@
 
 ### বিল্ড করার নিয়ম:
 ```bash
-git clone https://github.com/engrnirzorme02/NIRZOR-Voice-Typing-floating.git
-cd NIRZOR-Voice-Typing-floating
+git clone https://github.com/engrnirzorme02/Android-Voice-Typing-floating.git
+cd Android-Voice-Typing-floating
 ./gradlew assembleDebug
 ```
 

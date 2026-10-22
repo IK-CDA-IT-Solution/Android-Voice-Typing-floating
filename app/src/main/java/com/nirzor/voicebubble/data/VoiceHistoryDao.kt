@@ -60,12 +60,15 @@ interface VoiceHistoryDao {
     @Query("SELECT COUNT(*) FROM voice_history")
     fun getTotalCount(): Flow<Int>
 
+    @Query("SELECT COUNT(*) FROM voice_history WHERE isFavorite = 1")
+    fun getFavoriteCount(): Flow<Int>
+
     @Query("SELECT SUM(wordCount) FROM voice_history")
     fun getTotalWords(): Flow<Int?>
 
     @Query("SELECT SUM(charCount) FROM voice_history")
     fun getTotalChars(): Flow<Int?>
 
-    @Query("DELETE FROM voice_history WHERE createdAt < :cutoffTimestamp")
+    @Query("DELETE FROM voice_history WHERE createdAt < :cutoffTimestamp AND isFavorite = 0")
     suspend fun pruneOlderThan(cutoffTimestamp: Long): Int
 }

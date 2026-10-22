@@ -485,7 +485,7 @@ fun HomeScreen(
                                                 val aiEnabled = prefs.aiPolishEnabled.value
                                                 val polished = if (aiEnabled && rawResult.isNotBlank()) {
                                                     inAppTranscription = "$rawResult\n\n${context.getString(R.string.test_pad_polishing_indicator)}"
-                                                    GeminiApiClient.polishText(context, rawResult)
+                                                    GeminiApiClient.polishText(context, rawResult, prefs.polishStyle.value)
                                                 } else {
                                                     null
                                                 }

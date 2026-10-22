@@ -23,6 +23,7 @@ class VoiceHistoryRepository(
 
     val recentHistory: Flow<List<VoiceHistoryEntity>> = dao.getRecentHistory()
     val totalCount: Flow<Int> = dao.getTotalCount()
+    val favoriteCount: Flow<Int> = dao.getFavoriteCount()
     val totalWords: Flow<Int?> = dao.getTotalWords()
     val totalChars: Flow<Int?> = dao.getTotalChars()
 

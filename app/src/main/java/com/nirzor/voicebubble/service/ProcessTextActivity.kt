@@ -257,7 +257,7 @@ fun ProcessTextDialog(
                             scope.launch {
                                 val polished = GeminiApiClient.polishText(context, selectedText)
                                 isPolishing = false
-                                onFinishWithResult(polished)
+                                onFinishWithResult(polished ?: selectedText)
                             }
                         },
                         enabled = selectedText.isNotBlank() && !isPolishing && !isListening,
@@ -297,7 +297,7 @@ fun ProcessTextDialog(
                                                 isPolishing = true
                                                 val p = GeminiApiClient.polishText(context, raw)
                                                 isPolishing = false
-                                                p
+                                                p ?: raw
                                             } else {
                                                 raw
                                             }

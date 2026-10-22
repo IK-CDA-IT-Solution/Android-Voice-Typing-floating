@@ -17,6 +17,7 @@ data class UndoRedoResult(
 
 object UndoRedoManager {
 
+    private const val MAX_STACK_DEPTH = 50
     private val undoStack = Stack<String>()
     private val redoStack = Stack<String>()
 
@@ -36,6 +37,9 @@ object UndoRedoManager {
         if (newText.isBlank()) return
         if (undoStack.isNotEmpty() && undoStack.peek() == newText) return
 
+        if (undoStack.size >= MAX_STACK_DEPTH) {
+            undoStack.removeAt(0)
+        }
         undoStack.push(newText)
         redoStack.clear()
         _canUndo.value = undoStack.size > 1 || undoStack.isNotEmpty()
@@ -54,6 +58,9 @@ object UndoRedoManager {
         }
 
         val current = undoStack.pop()
+        if (redoStack.size >= MAX_STACK_DEPTH) {
+            redoStack.removeAt(0)
+        }
         redoStack.push(current)
 
         val previous = if (undoStack.isNotEmpty()) undoStack.peek() else null
@@ -83,6 +90,9 @@ object UndoRedoManager {
         }
 
         val textToRestore = redoStack.pop()
+        if (undoStack.size >= MAX_STACK_DEPTH) {
+            undoStack.removeAt(0)
+        }
         undoStack.push(textToRestore)
 
         _currentText.value = textToRestore

@@ -43,7 +43,7 @@ class GeminiSafeLoggingTest {
         assertTrue("The fake canary must reproduce the raw exception leak risk", rejected?.message?.contains("fakecanary") == true)
 
         val originalDraft = "keep this partial draft"
-        assertEquals(originalDraft, GeminiApiClient.polishWithApiKey(originalDraft, fakeKey))
+        assertNull(GeminiApiClient.polishWithApiKey(originalDraft, fakeKey))
         val entries = geminiAndroidLogs()
         assertTrue(entries.any { it.msg == "Gemini failure category=unexpected" })
         assertLogsContainNoCanaryOrThrowable(entries)

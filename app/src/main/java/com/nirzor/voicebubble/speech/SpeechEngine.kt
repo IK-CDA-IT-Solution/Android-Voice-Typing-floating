@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Build
@@ -62,6 +64,51 @@ class SpeechEngine(private val context: Context) {
     )
     private var toneGenerator: ToneGenerator? = null
     private var vibrator: Vibrator? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
+
+    private fun requestAudioFocus() {
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val playbackAttributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+                val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
+                    .setAudioAttributes(playbackAttributes)
+                    .setOnAudioFocusChangeListener { /* transient focus change */ }
+                    .build()
+                audioFocusRequest = focusRequest
+                audioManager.requestAudioFocus(focusRequest)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.requestAudioFocus(
+                    null,
+                    AudioManager.STREAM_VOICE_CALL,
+                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to request audio focus", e)
+        }
+    }
+
+    private fun abandonAudioFocus() {
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                audioFocusRequest?.let {
+                    audioManager.abandonAudioFocusRequest(it)
+                    audioFocusRequest = null
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.abandonAudioFocus(null)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to abandon audio focus", e)
+        }
+    }
 
     init {
         synchronized(sessionUpdateLock) { stateMachines[stateMachine] = Unit }
@@ -444,6 +491,7 @@ class SpeechEngine(private val context: Context) {
 
                         override fun onEvent(eventType: Int, params: Bundle?) {}
                     })
+                    requestAudioFocus()
                     startListening(intent)
                 }
             } catch (e: Exception) {
@@ -508,6 +556,7 @@ class SpeechEngine(private val context: Context) {
     }
 
     private fun cleanupRecognizer() {
+        abandonAudioFocus()
         try {
             speechRecognizer?.cancel()
             speechRecognizer?.destroy()
@@ -527,7 +576,9 @@ class SpeechEngine(private val context: Context) {
 
     private fun triggerHaptic(durationMs: Long) {
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK))
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 vibrator?.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
             } else {
                 @Suppress("DEPRECATION")
