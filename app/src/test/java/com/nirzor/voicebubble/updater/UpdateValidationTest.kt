@@ -9,25 +9,37 @@ import org.junit.Test
 
 class UpdateValidationTest {
     @Test
-    fun recoveryRestoresOnlyFoundSealedCommittedSessions() {
+    fun recoveryPreservesUnknownAndPotentiallyLiveSessions() {
         assertEquals(
-            InstallerRecoveryDecision.RESTORE_AWAITING_RESULT,
+            InstallerRecoveryDecision.PRESERVE_SESSION,
             installerRecoveryDecision(sessionFound = true, isSealed = true, isCommitted = true)
         )
         assertEquals(
-            InstallerRecoveryDecision.ABANDON_OR_CLEAR,
-            installerRecoveryDecision(sessionFound = true, isSealed = false, isCommitted = false)
-        )
-        assertEquals(
-            InstallerRecoveryDecision.ABANDON_OR_CLEAR,
+            InstallerRecoveryDecision.PRESERVE_SESSION,
             installerRecoveryDecision(sessionFound = true, isSealed = true, isCommitted = false)
         )
         assertEquals(
-            InstallerRecoveryDecision.ABANDON_OR_CLEAR,
+            InstallerRecoveryDecision.PRESERVE_SESSION,
             installerRecoveryDecision(sessionFound = true, isSealed = null, isCommitted = null)
         )
         assertEquals(
-            InstallerRecoveryDecision.ABANDON_OR_CLEAR,
+            InstallerRecoveryDecision.PRESERVE_SESSION,
+            installerRecoveryDecision(sessionFound = null, isSealed = false, isCommitted = false)
+        )
+        assertEquals(
+            InstallerRecoveryDecision.ABANDON_INCOMPLETE,
+            installerRecoveryDecision(sessionFound = true, isSealed = false, isCommitted = false)
+        )
+        assertEquals(
+            InstallerRecoveryDecision.ABANDON_INCOMPLETE,
+            installerRecoveryDecision(sessionFound = true, isSealed = false, isCommitted = null)
+        )
+        assertEquals(
+            InstallerRecoveryDecision.PRESERVE_SESSION,
+            installerRecoveryDecision(sessionFound = true, isSealed = false, isCommitted = true)
+        )
+        assertEquals(
+            InstallerRecoveryDecision.CLEAR_MISSING,
             installerRecoveryDecision(sessionFound = false, isSealed = true, isCommitted = true)
         )
     }
@@ -70,6 +82,8 @@ class UpdateValidationTest {
         val blocked = installerFailureMessage(PackageInstaller.STATUS_FAILURE_BLOCKED)
         val conflict = installerFailureMessage(PackageInstaller.STATUS_FAILURE_CONFLICT)
         assertTrue(aborted.contains("আবার চেষ্টা"))
+        assertTrue(aborted.contains("সুনির্দিষ্ট কারণ জানা যায়নি"))
+        assertFalse(aborted.contains("বাতিল"))
         assertTrue(blocked.contains("ব্লক করেছে"))
         assertTrue(blocked.contains("যাচাই করুন"))
         assertFalse(blocked.contains("নীতিমালার কারণে"))

@@ -339,6 +339,18 @@ fun SettingsScreen(
                         }
                     }
 
+                    is UpdateStatus.RecoveringInstall -> {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "আগের ইনস্টলেশন সেশন সংরক্ষিত আছে। Android installer-এর ফলাফলের অপেক্ষা করছি; নতুন ইনস্টলেশন শুরু করা হয়নি।",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            OutlinedButton(onClick = { updateManager.retry() }) {
+                                Text("ইনস্টলেশনের অবস্থা আবার যাচাই করুন")
+                            }
+                        }
+                    }
+
                     is UpdateStatus.Installed -> {
                         Text(
                             text = stringResource(R.string.updater_installed_toast, currentStatus.version),

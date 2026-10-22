@@ -5,6 +5,12 @@ plugins {
   alias(libs.plugins.roborazzi)
 }
 
+androidComponents {
+  beforeVariants(selector().withBuildType("release")) { variantBuilder ->
+    variantBuilder.hostTests[com.android.build.api.variant.HostTestBuilder.UNIT_TEST_TYPE]?.enable = true
+  }
+}
+
 val propVersionName: String = (project.findProperty("versionName") as? String)?.takeIf { it.isNotBlank() } ?: "1.0.0"
 val cleanVersionName = propVersionName.removePrefix("v").trim()
 val versionParts = cleanVersionName.split(".").map { it.toIntOrNull() ?: 0 }
@@ -76,7 +82,9 @@ android {
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       val hasReleaseConfig = signingConfigs.findByName("release") != null
-      signingConfig = if (hasReleaseConfig) {
+      signingConfig = if (project.findProperty("unsignedRelease") == "true") {
+        null
+      } else if (hasReleaseConfig) {
         signingConfigs.getByName("release")
       } else {
         signingConfigs.getByName("debug")
@@ -112,6 +120,12 @@ android {
 
 ksp {
   arg("room.schemaLocation", "$projectDir/schemas")
+}
+
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+  systemProperty("robolectric.dependency.repo.url", "https://repo.maven.apache.org/maven2")
+  // Different Robolectric SDKs must not share a loaded native graphics runtime.
+  forkEvery = 1
 }
 
 dependencies {

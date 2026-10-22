@@ -7,6 +7,8 @@ import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.content.pm.PackageInstaller
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.nirzor.voicebubble.BuildConfig
 import com.nirzor.voicebubble.R
@@ -47,6 +49,7 @@ sealed interface UpdateStatus {
     object Verifying : UpdateStatus
     data class ReadyToInstall(val apkFile: File) : UpdateStatus
     object Installing : UpdateStatus
+    data class RecoveringInstall(val sessionId: Int) : UpdateStatus
     data class Installed(val version: String) : UpdateStatus
     data class Error(
         val message: String,
@@ -87,6 +90,7 @@ class UpdateManager(private val context: Context) {
     @Volatile private var lastDownloadInfo: UpdateInfo? = null
     @Volatile private var verifiedApkInfo: UpdateInfo? = null
     @Volatile private var verifiedApkSha256: String? = null
+    private var recoveryObserver: PackageInstaller.SessionCallback? = null
     private val updatePrefs by lazy {
         context.getSharedPreferences("updater_state", Context.MODE_PRIVATE)
     }
@@ -142,42 +146,80 @@ class UpdateManager(private val context: Context) {
             File(context.cacheDir, "voicebubble_update.apk").delete()
             return
         }
+        synchronized(operationLock) {
+            operationInProgress = true
+            _isBusy.value = true
+        }
         val installed = installedPackageInfo()
         if (installed != null && installed.versionCodeCompat() >= pendingCode) {
             clearPendingInstall()
+            finishOperation()
             _status.value = UpdateStatus.Installed(installed.versionName ?: BuildConfig.VERSION_NAME)
             return
         }
         val pendingSessionId = updatePrefs.getInt(KEY_PENDING_SESSION_ID, -1)
+        var lookupSucceeded = true
         val sessionInfo = try {
             context.packageManager.packageInstaller.mySessions.firstOrNull { it.sessionId == pendingSessionId }
         } catch (_: Exception) {
+            lookupSucceeded = false
             null
         }
         val recoveryDecision = installerRecoveryDecision(
-            sessionFound = sessionInfo != null,
-            isSealed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) sessionInfo?.isSealed else null,
+            sessionFound = if (lookupSucceeded) sessionInfo != null else null,
+            isSealed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) sessionInfo?.isSealed else null,
             isCommitted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) sessionInfo?.isCommitted else null
         )
-        if (recoveryDecision == InstallerRecoveryDecision.RESTORE_AWAITING_RESULT) {
-            operationInProgress = true
-            _isBusy.value = true
-            _status.value = UpdateStatus.Installing
-        } else {
-            if (sessionInfo != null) {
-                try {
-                    context.packageManager.packageInstaller.abandonSession(pendingSessionId)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not abandon interrupted installer session", e)
-                }
+        if (recoveryDecision == InstallerRecoveryDecision.PRESERVE_SESSION) {
+            preservePendingRecovery(pendingSessionId)
+            return
+        }
+        if (recoveryDecision == InstallerRecoveryDecision.ABANDON_INCOMPLETE) {
+            try {
+                context.packageManager.packageInstaller.abandonSession(pendingSessionId)
+            } catch (_: Exception) {
+                preservePendingRecovery(pendingSessionId)
+                return
             }
-            clearPendingInstall()
-            File(context.cacheDir, "voicebubble_update.apk").delete()
-            _status.value = UpdateStatus.Error("আপডেটটি সম্পন্ন হয়নি। আবার চেষ্টা করুন।")
+        }
+        clearPendingInstall()
+        finishOperation()
+        File(context.cacheDir, "voicebubble_update.apk").delete()
+        _status.value = UpdateStatus.Error("আপডেটটি সম্পন্ন হয়নি। আবার চেষ্টা করুন।")
+    }
+
+    private fun preservePendingRecovery(sessionId: Int) {
+        _status.value = UpdateStatus.RecoveringInstall(sessionId)
+        if (recoveryObserver != null) return
+        val observer = object : PackageInstaller.SessionCallback() {
+            override fun onCreated(sessionId: Int) = Unit
+            override fun onBadgingChanged(sessionId: Int) = Unit
+            override fun onActiveChanged(sessionId: Int, active: Boolean) = Unit
+            override fun onProgressChanged(sessionId: Int, progress: Float) = Unit
+            override fun onFinished(sessionId: Int, success: Boolean) {
+                if (_status.value !is UpdateStatus.RecoveringInstall ||
+                    sessionId != updatePrefs.getInt(KEY_PENDING_SESSION_ID, -1)) return
+                if (success) onInstallSuccess()
+                else onInstallFailure(PackageInstaller.STATUS_FAILURE, sessionId)
+            }
+        }
+        try {
+            context.packageManager.packageInstaller.registerSessionCallback(observer, Handler(Looper.getMainLooper()))
+            recoveryObserver = observer
+        } catch (_: Exception) {
+            // Preserve identity/cache even if observation is temporarily unavailable.
+            // The user can recheck and the existing result receiver remains authoritative.
+            Log.w(TAG, "Pending installer observation unavailable; retry recovery check")
         }
     }
 
     private fun clearPendingInstall() {
+        recoveryObserver?.let {
+            try {
+                context.packageManager.packageInstaller.unregisterSessionCallback(it)
+            } catch (_: Exception) { }
+        }
+        recoveryObserver = null
         updatePrefs.edit().remove(KEY_PENDING_VERSION_CODE).remove(KEY_PENDING_SESSION_ID).apply()
     }
 
@@ -317,6 +359,10 @@ class UpdateManager(private val context: Context) {
 
     /** Re-check releases after an error; the UI should call this instead of merely clearing status. */
     fun retry() {
+        if (_status.value is UpdateStatus.RecoveringInstall) {
+            recoverInterruptedUpdate()
+            return
+        }
         val failed = _status.value as? UpdateStatus.Error
         val retryInfo = lastDownloadInfo
         if (failed != null && retryInfo != null && retryInfo.versionCode > BuildConfig.VERSION_CODE) {

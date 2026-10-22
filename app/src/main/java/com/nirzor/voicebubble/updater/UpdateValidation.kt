@@ -4,19 +4,21 @@ import android.content.pm.PackageInstaller
 import java.net.URI
 
 internal enum class InstallerRecoveryDecision {
-    RESTORE_AWAITING_RESULT,
-    ABANDON_OR_CLEAR
+    PRESERVE_SESSION,
+    ABANDON_INCOMPLETE,
+    CLEAR_MISSING
 }
 
-/** Never keep the updater busy unless the installer confirms a sealed, committed session. */
+/** Unknown flags/lookup failures are not evidence that an in-flight session is incomplete. */
 internal fun installerRecoveryDecision(
-    sessionFound: Boolean,
+    sessionFound: Boolean?,
     isSealed: Boolean?,
     isCommitted: Boolean?
-): InstallerRecoveryDecision = if (sessionFound && isSealed == true && isCommitted == true) {
-    InstallerRecoveryDecision.RESTORE_AWAITING_RESULT
-} else {
-    InstallerRecoveryDecision.ABANDON_OR_CLEAR
+): InstallerRecoveryDecision = when {
+    sessionFound == false -> InstallerRecoveryDecision.CLEAR_MISSING
+    sessionFound == true && isSealed == false && isCommitted != true ->
+        InstallerRecoveryDecision.ABANDON_INCOMPLETE
+    else -> InstallerRecoveryDecision.PRESERVE_SESSION
 }
 
 /** Parse a sha256sum-style response, accepting either a bare digest or one filename. */
@@ -65,7 +67,7 @@ internal fun isApkMetadataTrusted(
 
 /** Safe, localized outcomes for installer failures; never expose system-provided text. */
 internal fun installerFailureMessage(status: Int): String = when (status) {
-    PackageInstaller.STATUS_FAILURE_ABORTED -> "ইনস্টলেশন বাতিল করা হয়েছে। আবার চেষ্টা করুন।"
+    PackageInstaller.STATUS_FAILURE_ABORTED -> "Android installer ইনস্টলেশনটি থামিয়েছে; সুনির্দিষ্ট কারণ জানা যায়নি। আবার চেষ্টা করুন।"
     PackageInstaller.STATUS_FAILURE_BLOCKED -> "অ্যান্ড্রয়েড ইনস্টলেশনটি ব্লক করেছে। অনুমতি, সিকিউরিটি ও ডিভাইস নীতিমালা যাচাই করুন।"
     PackageInstaller.STATUS_FAILURE_CONFLICT -> "বিদ্যমান প্যাকেজ বা স্বাক্ষরের সাথে দ্বন্দ্ব রয়েছে।"
     PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> "এই সংস্করণটি আপনার ডিভাইসের জন্য উপযুক্ত নয়।"
