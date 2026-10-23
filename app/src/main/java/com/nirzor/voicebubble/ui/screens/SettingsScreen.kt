@@ -485,7 +485,7 @@ fun SettingsScreen(
                                         horizontalAlignment = Alignment.CenterHorizontally
                                     ) {
                                         Text(
-                                            text = style.displayName,
+                                            text = style.title,
                                             style = MaterialTheme.typography.labelSmall,
                                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                             color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant

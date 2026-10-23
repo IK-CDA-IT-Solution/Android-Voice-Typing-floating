@@ -36,6 +36,8 @@ enum class PolishStyle(val key: String, val title: String, val description: Stri
     CASUAL_MESSAGING("casual_messaging", "Casual Messaging", "বন্ধুত্বপূর্ণ ও অনানুষ্ঠানিক মেসেজিং রূপ"),
     CODE_HYBRID("code_hybrid", "Code/English Hybrid", "টেকনিক্যাল শব্দ ও কোড/ইংরেজি অক্ষত রাখুন");
 
+    val displayName: String get() = title
+
     companion object {
         fun fromKey(key: String): PolishStyle = entries.firstOrNull { it.key == key } ?: STRICT_GRAMMAR
     }
