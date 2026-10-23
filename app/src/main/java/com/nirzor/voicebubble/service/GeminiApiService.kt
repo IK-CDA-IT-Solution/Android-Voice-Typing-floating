@@ -121,6 +121,17 @@ object GeminiApiClient {
         polishWithApiKey(rawText, apiKey, style)
     }
 
+    internal fun extractCleanText(parts: List<PartItem>): String? {
+        val raw = parts
+            .filter { it.thought != true }
+            .mapNotNull { it.text }
+            .joinToString("")
+            .replace(Regex("<thought>[\\s\\S]*?</thought>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "")
+            .trim()
+        return raw.ifBlank { null }
+    }
+
     /** Same production fallback path, testable without reading or replacing stored credentials. */
     internal suspend fun polishWithApiKey(
         rawText: String,
@@ -146,15 +157,7 @@ object GeminiApiClient {
                 service.generateContent(apiKey = apiKey, request = request)
             }
             val parts = response.candidates?.firstOrNull()?.content?.parts.orEmpty()
-            val cleaned = parts
-                .filter { it.thought != true }
-                .mapNotNull { it.text }
-                .joinToString("")
-                .trim()
-
-            if (cleaned.isBlank()) {
-                return@withContext null
-            }
+            val cleaned = extractCleanText(parts) ?: return@withContext null
 
             // Length validation: output length must be between 0.5x and 2x of input
             val inLen = rawText.length

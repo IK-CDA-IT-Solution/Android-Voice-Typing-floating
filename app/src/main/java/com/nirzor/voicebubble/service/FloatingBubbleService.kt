@@ -1223,7 +1223,9 @@ class FloatingBubbleService : Service() {
             type = "text/plain"
             putExtra(Intent.EXTRA_TEXT, transcript)
         }
-        if (packageManager.resolveActivity(sendIntent, PackageManager.MATCH_DEFAULT_ONLY) == null) {
+        val hasHandler = packageManager.resolveActivity(sendIntent, 0) != null ||
+            packageManager.queryIntentActivities(sendIntent, 0).isNotEmpty()
+        if (!hasHandler) {
             showTemporaryBadge("কোনো শেয়ার অ্যাপ পাওয়া যায়নি", isAi = false)
             return
         }
