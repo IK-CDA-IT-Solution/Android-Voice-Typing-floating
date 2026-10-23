@@ -106,7 +106,7 @@ class UpdateManager(private val context: Context) {
     }
 
     companion object {
-        private const val OWNER = "engrnirzorme02"
+        private const val OWNER = "IK-CDA-IT-Solution"
         private const val REPO = "Android-Voice-Typing-floating"
         private const val APK_NAME = "voicebubble.apk"
         private const val SHA_NAME = "voicebubble.apk.sha256"

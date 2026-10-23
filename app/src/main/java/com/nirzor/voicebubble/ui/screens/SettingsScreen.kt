@@ -189,7 +189,7 @@ fun SettingsScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Release repo: engrnirzorme02",
+                            text = "Release repo: IK-CDA-IT-Solution",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

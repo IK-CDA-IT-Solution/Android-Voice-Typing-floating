@@ -45,7 +45,7 @@
 
 ### বিল্ড করার নিয়ম:
 ```bash
-git clone https://github.com/engrnirzorme02/Android-Voice-Typing-floating.git
+git clone https://github.com/IK-CDA-IT-Solution/Android-Voice-Typing-floating.git
 cd Android-Voice-Typing-floating
 ./gradlew assembleDebug
 ```
@@ -75,4 +75,4 @@ export KEY_PASSWORD="password"
 ---
 
 ## 👤 লেখক
-**Engr Nir Zorme** ([@engrnirzorme02](https://github.com/engrnirzorme02))
+**Engr Nir Zorme** ([@IK-CDA-IT-Solution](https://github.com/IK-CDA-IT-Solution))
