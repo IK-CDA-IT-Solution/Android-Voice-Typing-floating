@@ -204,4 +204,21 @@
     <string name="updater_perm_dialog_btn">সেটিংসে যান</string>
     <string name="updater_blocked_busy">ভয়েস রেকর্ডিং বা প্রসেসিং চলাকালীন আপডেট করা যাবে না</string>
     <string name="updater_sha_mismatch">SHA-256 চেকসাম মেলেনি! ফাইলটি বাতিল করা হয়েছে।</string>
+
+    <!-- Sprint 1 (P0) Strings -->
+    <string name="speech_err_processing_timeout">প্রসেসিং সময়সীমা অতিক্রান্ত হয়েছে (Processing timeout)।</string>
+    <string name="accessibility_service_label">Voice Bubble Direct Inject Service</string>
+    <string name="accessibility_service_desc">ভয়েস বাবলের মাধ্যমে যেকোনো অ্যাপের টেক্সট ফিল্ডে সরাসরি টাইপ করার জন্য এই সার্ভিসটি ব্যবহৃত হয়।</string>
+    <string name="settings_direct_inject_title">সরাসরি টেক্সট ইনসার্ট</string>
+    <string name="settings_direct_inject_desc">Accessibility Service চালু থাকলে কপি-পেস্ট ছাড়াই সরাসরি লেখা বসবে</string>
+    <string name="settings_continuous_mode_title">কন্টিনিউয়াস ডিক্টেশন মোড</string>
+    <string name="settings_continuous_mode_desc">কথা শেষ হলেও লিসেনিং বন্ধ না হয়ে বিরতিহীনভাবে বাক্য যুক্ত হতে থাকবে</string>
+    <string name="settings_auto_punctuation_title">ভয়েস কমান্ড ও অটো-পাংচুয়েশন</string>
+    <string name="settings_auto_punctuation_desc">কথা বলার সময় পাংচুয়েশন ও বিশেষ ভয়েস কমান্ড স্বয়ংক্রিয়ভাবে সক্রিয় হবে</string>
+    <string name="perm_accessibility_title">অ্যাক্সেসিবিলিটি সার্ভিস (সরাসরি ইনসার্ট)</string>
+    <string name="perm_accessibility_desc">কপি-পেস্ট ছাড়া যেকোনো অ্যাপে সরাসরি টেক্সট লেখার জন্য এই সার্ভিস অন করুন</string>
+    <string name="action_raw">কাঁচা</string>
+    <string name="action_polish">পলিশ</string>
+    <string name="action_discard">বাতিল</string>
+    <string name="action_edit">এডিট</string>
 </resources>

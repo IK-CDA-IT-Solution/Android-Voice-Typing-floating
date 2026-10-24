@@ -32,9 +32,16 @@ object SupportedLanguages {
 }
 
 enum class PolishStyle(val key: String, val title: String, val description: String) {
-    STRICT_GRAMMAR("strict_grammar", "Strict Grammar", "যথাযথ ব্যাকরণ ও প্রমিত লিখিত রূপ"),
-    CASUAL_MESSAGING("casual_messaging", "Casual Messaging", "বন্ধুত্বপূর্ণ ও অনানুষ্ঠানিক মেসেজিং রূপ"),
-    CODE_HYBRID("code_hybrid", "Code/English Hybrid", "টেকনিক্যাল শব্দ ও কোড/ইংরেজি অক্ষত রাখুন");
+    STRICT_GRAMMAR("strict_grammar", "গুছিয়ে দাও (Grammar)", "যথাযথ ব্যাকরণ ও প্রমিত লিখিত রূপ"),
+    CASUAL_MESSAGING("casual_messaging", "ক্যাজুয়াল (Casual)", "বন্ধুত্বপূর্ণ ও অনানুষ্ঠানিক মেসেজিং রূপ"),
+    CODE_HYBRID("code_hybrid", "কোড/ইংরেজি হাইব্রিড", "টেকনিক্যাল শব্দ ও কোড/ইংরেজি অক্ষত রাখুন"),
+    PARAPHRASE("paraphrase", "স্মার্ট প্যারাফ্রেজ", "একই অর্থ রেখে আরও সুন্দরভাবে সাজিয়ে লেখা"),
+    SHORTEN("shorten", "সংক্ষেপ করো (Shorten)", "মূল কথা রেখে সংক্ষিপ্ত সারাংশ"),
+    EXPAND("expand", "বিস্তারিত করো (Expand)", "প্রাসঙ্গিক বিবরণসহ প্রাঞ্জল সম্প্রসারণ"),
+    FORMAL("formal", "আনুষ্ঠানিক (Formal)", "অফিশিয়াল ইমেইল বা দাপ্তরিক ভাষা"),
+    TRANSLATE_BN_EN("translate_bn_en", "অনুবাদ (বাংলা ↔ ইংরেজি)", "বাংলা বললে ইংরেজিতে এবং ইংরেজি বললে বাংলায় রূপান্তর"),
+    BULLET_POINTS("bullet_points", "বুলেট পয়েন্ট", "বক্তব্যকে পরিষ্কার বুলেট পয়েন্ট আকারে সাজানো"),
+    CUSTOM("custom", "কাস্টম প্রম্পট (Custom)", "আপনার নিজের লেখা নির্দেশনা অনুযায়ী রূপান্তর");
 
     val displayName: String get() = title
 
@@ -104,6 +111,23 @@ class AppPreferences(context: Context) {
     private val _lastInstalledVersionCode = MutableStateFlow(prefs.getInt(KEY_LAST_INSTALLED_VER, 0))
     val lastInstalledVersionCode: StateFlow<Int> = _lastInstalledVersionCode.asStateFlow()
 
+    private val _continuousMode = MutableStateFlow(prefs.getBoolean(KEY_CONTINUOUS_MODE, false))
+    val continuousMode: StateFlow<Boolean> = _continuousMode.asStateFlow()
+
+    private val _autoPunctuation = MutableStateFlow(prefs.getBoolean(KEY_AUTO_PUNCTUATION, true))
+    val autoPunctuation: StateFlow<Boolean> = _autoPunctuation.asStateFlow()
+
+    private val _customPolishPrompt = MutableStateFlow(prefs.getString(KEY_CUSTOM_POLISH_PROMPT, "") ?: "")
+    val customPolishPrompt: StateFlow<String> = _customPolishPrompt.asStateFlow()
+
+    private val _recentLanguages = MutableStateFlow(
+        (prefs.getString(KEY_RECENT_LANGUAGES, "bn-BD,en-US") ?: "bn-BD,en-US").split(",")
+    )
+    val recentLanguages: StateFlow<List<String>> = _recentLanguages.asStateFlow()
+
+    private val _directInject = MutableStateFlow(prefs.getBoolean(KEY_DIRECT_INJECT, false))
+    val directInject: StateFlow<Boolean> = _directInject.asStateFlow()
+
     init {
         // Enforce 48dp minimum in storage
         if (prefs.getInt(KEY_BUBBLE_SIZE, 60) < 48) {
@@ -112,8 +136,38 @@ class AppPreferences(context: Context) {
     }
 
     fun setLanguage(code: String) {
-        prefs.edit().putString(KEY_LANGUAGE, code).apply()
+        setSelectedLanguage(code)
+    }
+
+    fun setSelectedLanguage(code: String) {
+        val current = _selectedLanguage.value
+        if (current != code && code != "default") {
+            val updated = listOf(code, current).distinct().take(2)
+            _recentLanguages.value = updated
+            prefs.edit().putString(KEY_RECENT_LANGUAGES, updated.joinToString(",")).apply()
+        }
         _selectedLanguage.value = code
+        prefs.edit().putString(KEY_LANGUAGE, code).apply()
+    }
+
+    fun setContinuousMode(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_CONTINUOUS_MODE, enabled).apply()
+        _continuousMode.value = enabled
+    }
+
+    fun setAutoPunctuation(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_AUTO_PUNCTUATION, enabled).apply()
+        _autoPunctuation.value = enabled
+    }
+
+    fun setCustomPolishPrompt(prompt: String) {
+        prefs.edit().putString(KEY_CUSTOM_POLISH_PROMPT, prompt).apply()
+        _customPolishPrompt.value = prompt
+    }
+
+    fun setDirectInject(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_DIRECT_INJECT, enabled).apply()
+        _directInject.value = enabled
     }
 
     fun setBubbleSize(sizeDp: Int) {
@@ -221,6 +275,11 @@ class AppPreferences(context: Context) {
         private const val KEY_BUBBLE_Y = "key_bubble_y"
         private const val KEY_LAST_UPDATE_CHECK = "key_last_update_check"
         private const val KEY_LAST_INSTALLED_VER = "key_last_installed_ver"
+        private const val KEY_CONTINUOUS_MODE = "key_continuous_mode"
+        private const val KEY_AUTO_PUNCTUATION = "key_auto_punctuation"
+        private const val KEY_CUSTOM_POLISH_PROMPT = "key_custom_polish_prompt"
+        private const val KEY_RECENT_LANGUAGES = "key_recent_languages"
+        private const val KEY_DIRECT_INJECT = "key_direct_inject"
 
         @Volatile
         private var INSTANCE: AppPreferences? = null

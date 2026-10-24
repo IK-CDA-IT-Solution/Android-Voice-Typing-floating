@@ -66,6 +66,25 @@ class SpeechEngine(private val context: Context) {
     private var vibrator: Vibrator? = null
     private var audioFocusRequest: AudioFocusRequest? = null
 
+    private var accumulatedText = StringBuilder()
+    private var isContinuousSessionActive = false
+    private var isManualStopPending = false
+    private var sessionStartTimeMs = 0L
+    private var activeLanguageCode: String = "bn-BD"
+    private var activeOnFinalResult: ((rawText: String, lang: String, durationMs: Long) -> Unit)? = null
+    private var activeOnErrorOccurred: ((errorMessage: String, errorCode: Int) -> Unit)? = null
+
+    private val processingTimeoutRunnable = Runnable {
+        if (stateMachine.state.value is BubbleState.Processing) {
+            Log.w(TAG, "Speech processing timed out after 10s watchdog")
+            invalidatePendingStart()
+            cleanupRecognizer()
+            val errorMsg = context.getString(R.string.speech_err_processing_timeout)
+            stateMachine.moveToError(errorMsg, -3)
+            activeOnErrorOccurred?.invoke(errorMsg, -3)
+        }
+    }
+
     private fun requestAudioFocus() {
         try {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
@@ -140,6 +159,7 @@ class SpeechEngine(private val context: Context) {
         languageCode: String = "bn-BD",
         playTone: Boolean = true,
         enableHaptic: Boolean = true,
+        continuousMode: Boolean = false,
         onPartialResult: ((String) -> Unit)? = null,
         onFinalResult: ((rawText: String, lang: String, durationMs: Long) -> Unit)? = null,
         onErrorOccurred: ((errorMessage: String, errorCode: Int) -> Unit)? = null
@@ -187,11 +207,18 @@ class SpeechEngine(private val context: Context) {
             return
         }
 
-        if (!stateMachine.startListening()) return
+        if (!stateMachine.startListening(isContinuous = continuousMode)) return
 
         hasRetriedBusy = false
         hasRetriedOnline = false
         hasRetriedOnDevice = false
+        isContinuousSessionActive = continuousMode
+        isManualStopPending = false
+        accumulatedText.clear()
+        sessionStartTimeMs = System.currentTimeMillis()
+        activeLanguageCode = languageCode
+        activeOnFinalResult = onFinalResult
+        activeOnErrorOccurred = onErrorOccurred
 
         // Invalidate callbacks from the previous recognizer before cancelling it.
         invalidatePendingStart()
@@ -205,7 +232,8 @@ class SpeechEngine(private val context: Context) {
             onFinalResult = onFinalResult,
             onErrorOccurred = onErrorOccurred,
             isRetry = false,
-            forceOnDevice = !defaultRecognizerAvailable || (circuitOpen && onDeviceRecognizerAvailable)
+            forceOnDevice = !defaultRecognizerAvailable || (circuitOpen && onDeviceRecognizerAvailable),
+            continuousMode = continuousMode
         )
         if (circuitOpen && onDeviceRecognizerAvailable && defaultRecognizerAvailable) {
             onErrorOccurred?.invoke(
@@ -224,7 +252,8 @@ class SpeechEngine(private val context: Context) {
         onFinalResult: ((rawText: String, lang: String, durationMs: Long) -> Unit)?,
         onErrorOccurred: ((errorMessage: String, errorCode: Int) -> Unit)?,
         isRetry: Boolean,
-        forceOnDevice: Boolean
+        forceOnDevice: Boolean,
+        continuousMode: Boolean = false
     ) {
         recognizerStartJob?.cancel()
         val requestId = ++startRequestId
@@ -243,6 +272,7 @@ class SpeechEngine(private val context: Context) {
                 onErrorOccurred = onErrorOccurred,
                 isRetry = isRetry,
                 forceOnDevice = forceOnDevice,
+                continuousMode = continuousMode,
                 requestId = requestId
             )
         }
@@ -264,6 +294,7 @@ class SpeechEngine(private val context: Context) {
         onErrorOccurred: ((errorMessage: String, errorCode: Int) -> Unit)?,
         isRetry: Boolean,
         forceOnDevice: Boolean,
+        continuousMode: Boolean = false,
         requestId: Long
     ) {
         mainHandler.post {
@@ -273,7 +304,7 @@ class SpeechEngine(private val context: Context) {
             recognizerStartJob = null
 
             if (isRetry) {
-                if (!stateMachine.restartListening()) {
+                if (!stateMachine.restartListening(isContinuous = continuousMode)) {
                     Log.w(TAG, "Skipping recognizer retry because the session is no longer active")
                     return@post
                 }
@@ -333,10 +364,13 @@ class SpeechEngine(private val context: Context) {
                             if (requestId != startRequestId) return
                             Log.d(TAG, "SpeechRecognizer onEndOfSpeech")
                             stateMachine.moveToProcessing()
+                            mainHandler.removeCallbacks(processingTimeoutRunnable)
+                            mainHandler.postDelayed(processingTimeoutRunnable, 10_000L)
                         }
 
                         override fun onError(error: Int) {
                             if (requestId != startRequestId) return
+                            mainHandler.removeCallbacks(processingTimeoutRunnable)
                             Log.w(
                                 TAG,
                                 SpeechDiagnostics.failure(
@@ -346,6 +380,36 @@ class SpeechEngine(private val context: Context) {
                                     retry = isRetry
                                 )
                             )
+
+                            if (isContinuousSessionActive && !isManualStopPending && error == SpeechRecognizer.ERROR_NO_MATCH) {
+                                Log.d(TAG, "SpeechRecognizer NO_MATCH during continuous mode, resuming listening after 300ms")
+                                invalidatePendingStart()
+                                cleanupRecognizer()
+                                scheduleRecognizerStart(
+                                    delayMillis = 300L,
+                                    languageCode = languageCode,
+                                    playTone = false,
+                                    enableHaptic = false,
+                                    onPartialResult = onPartialResult,
+                                    onFinalResult = onFinalResult,
+                                    onErrorOccurred = onErrorOccurred,
+                                    isRetry = true,
+                                    forceOnDevice = forceOnDevice,
+                                    continuousMode = true
+                                )
+                                return
+                            }
+
+                            if (isContinuousSessionActive && accumulatedText.isNotBlank()) {
+                                Log.d(TAG, "SpeechRecognizer error in continuous mode, delivering accumulated transcript")
+                                val finalFullText = accumulatedText.toString().trim()
+                                val duration = System.currentTimeMillis() - sessionStartTimeMs
+                                invalidatePendingStart()
+                                cleanupRecognizer()
+                                if (enableHaptic) triggerHapticSuccess()
+                                onFinalResult?.invoke(finalFullText, languageCode, duration)
+                                return
+                            }
 
                             // Retry one busy-service error without allowing overlapping start jobs.
                             if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY && !hasRetriedBusy) {
@@ -362,7 +426,8 @@ class SpeechEngine(private val context: Context) {
                                     onFinalResult = onFinalResult,
                                     onErrorOccurred = onErrorOccurred,
                                     isRetry = true,
-                                    forceOnDevice = forceOnDevice
+                                    forceOnDevice = forceOnDevice,
+                                    continuousMode = isContinuousSessionActive
                                 )
                                 return
                             }
@@ -403,7 +468,8 @@ class SpeechEngine(private val context: Context) {
                                     onFinalResult = onFinalResult,
                                     onErrorOccurred = onErrorOccurred,
                                     isRetry = true,
-                                    forceOnDevice = false
+                                    forceOnDevice = false,
+                                    continuousMode = isContinuousSessionActive
                                 )
                                 return
                             }
@@ -433,7 +499,8 @@ class SpeechEngine(private val context: Context) {
                                     onFinalResult = onFinalResult,
                                     onErrorOccurred = onErrorOccurred,
                                     isRetry = true,
-                                    forceOnDevice = true
+                                    forceOnDevice = true,
+                                    continuousMode = isContinuousSessionActive
                                 )
                                 return
                             }
@@ -458,18 +525,55 @@ class SpeechEngine(private val context: Context) {
 
                         override fun onResults(results: Bundle?) {
                             if (requestId != startRequestId) return
+                            mainHandler.removeCallbacks(processingTimeoutRunnable)
                             if (!forceOnDevice) {
                                 onlineNetworkCircuitBreaker.recordOnlineSuccess()
                             }
-                            val duration = System.currentTimeMillis() - startTimeMs
                             val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                             val text = matches?.firstOrNull()?.trim() ?: ""
 
                             if (text.isNotBlank()) {
+                                if (accumulatedText.isNotEmpty()) {
+                                    accumulatedText.append(" ")
+                                }
+                                accumulatedText.append(text)
+                            }
+
+                            if (isContinuousSessionActive && !isManualStopPending) {
+                                val currentAccumulated = accumulatedText.toString().trim()
+                                if (currentAccumulated.isNotBlank()) {
+                                    stateMachine.updatePartialText(currentAccumulated)
+                                    onPartialResult?.invoke(currentAccumulated)
+                                }
+                                cleanupRecognizer()
+                                scheduleRecognizerStart(
+                                    delayMillis = 300L,
+                                    languageCode = languageCode,
+                                    playTone = false,
+                                    enableHaptic = false,
+                                    onPartialResult = onPartialResult,
+                                    onFinalResult = onFinalResult,
+                                    onErrorOccurred = onErrorOccurred,
+                                    isRetry = true,
+                                    forceOnDevice = forceOnDevice,
+                                    continuousMode = true
+                                )
+                                return
+                            }
+
+                            val finalFullText = if (isContinuousSessionActive) {
+                                accumulatedText.toString().trim()
+                            } else {
+                                text
+                            }
+                            val duration = System.currentTimeMillis() - if (isContinuousSessionActive) sessionStartTimeMs else startTimeMs
+
+                            if (finalFullText.isNotBlank()) {
                                 invalidatePendingStart()
+                                cleanupRecognizer()
                                 if (enableHaptic) triggerHapticSuccess()
                                 if (playTone) playBeep(ToneGenerator.TONE_PROP_ACK)
-                                onFinalResult?.invoke(text, languageCode, duration)
+                                onFinalResult?.invoke(finalFullText, languageCode, duration)
                             } else {
                                 val msg = context.getString(R.string.speech_err_no_match)
                                 invalidatePendingStart()
@@ -516,11 +620,25 @@ class SpeechEngine(private val context: Context) {
 
     fun stopSession() {
         mainHandler.post {
+            mainHandler.removeCallbacks(processingTimeoutRunnable)
+            if (isContinuousSessionActive && accumulatedText.isNotBlank()) {
+                val finalFullText = accumulatedText.toString().trim()
+                val duration = System.currentTimeMillis() - sessionStartTimeMs
+                invalidatePendingStart()
+                cleanupRecognizer()
+                activeOnFinalResult?.invoke(finalFullText, activeLanguageCode, duration)
+                return@post
+            }
+
             if (isStartPending) {
                 invalidatePendingStart()
                 cleanupRecognizer()
                 stateMachine.resetToIdle()
                 return@post
+            }
+
+            if (isContinuousSessionActive) {
+                isManualStopPending = true
             }
 
             try {
@@ -533,6 +651,9 @@ class SpeechEngine(private val context: Context) {
 
     fun cancelSession() {
         mainHandler.post {
+            mainHandler.removeCallbacks(processingTimeoutRunnable)
+            isContinuousSessionActive = false
+            accumulatedText.clear()
             invalidatePendingStart()
             cleanupRecognizer()
             stateMachine.resetToIdle()
@@ -541,6 +662,9 @@ class SpeechEngine(private val context: Context) {
 
     fun destroy() {
         mainHandler.post {
+            mainHandler.removeCallbacks(processingTimeoutRunnable)
+            isContinuousSessionActive = false
+            accumulatedText.clear()
             invalidatePendingStart()
             cleanupRecognizer()
             stateMachine.resetToIdle()
@@ -556,6 +680,7 @@ class SpeechEngine(private val context: Context) {
     }
 
     private fun cleanupRecognizer() {
+        mainHandler.removeCallbacks(processingTimeoutRunnable)
         abandonAudioFocus()
         try {
             speechRecognizer?.cancel()

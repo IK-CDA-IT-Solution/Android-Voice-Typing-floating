@@ -28,11 +28,20 @@ class StateMachineUnitTest {
         val started = stateMachine.startListening()
         assertTrue(started)
         assertTrue(stateMachine.state.value is BubbleState.Listening)
+        assertFalse((stateMachine.state.value as BubbleState.Listening).isContinuous)
         assertFalse(stateMachine.canAcceptTap())
 
         // Secondary taps must be ignored
         val tapAgain = stateMachine.startListening()
         assertFalse(tapAgain)
+    }
+
+    @Test
+    fun testContinuousListeningState() {
+        val started = stateMachine.startListening(isContinuous = true)
+        assertTrue(started)
+        val current = stateMachine.state.value as BubbleState.Listening
+        assertTrue(current.isContinuous)
     }
 
     @Test

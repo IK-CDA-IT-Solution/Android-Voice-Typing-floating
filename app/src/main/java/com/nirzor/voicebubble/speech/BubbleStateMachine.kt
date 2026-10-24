@@ -6,7 +6,11 @@ import kotlinx.coroutines.flow.asStateFlow
 
 sealed interface BubbleState {
     object Idle : BubbleState
-    data class Listening(val rmsDb: Float = 0f, val partialText: String = "") : BubbleState
+    data class Listening(
+        val rmsDb: Float = 0f,
+        val partialText: String = "",
+        val isContinuous: Boolean = false
+    ) : BubbleState
     object Processing : BubbleState
     data class Done(val rawText: String, val polishedText: String?, val copied: Boolean = true) : BubbleState
     data class Error(
@@ -31,12 +35,12 @@ class BubbleStateMachine {
         return _state.value is BubbleState.Idle
     }
 
-    fun startListening(): Boolean {
+    fun startListening(isContinuous: Boolean = false): Boolean {
         if (_state.value !is BubbleState.Idle) {
             return false // Taps in non-IDLE states are ignored
         }
         latestPartialText = ""
-        _state.value = BubbleState.Listening(0f, "")
+        _state.value = BubbleState.Listening(0f, "", isContinuous)
         return true
     }
 
@@ -44,11 +48,11 @@ class BubbleStateMachine {
      * Restarts listening after a recoverable recognizer error, including an error
      * delivered after onEndOfSpeech moved the state to Processing.
      */
-    fun restartListening(): Boolean {
+    fun restartListening(isContinuous: Boolean = false): Boolean {
         if (_state.value !is BubbleState.Listening && _state.value !is BubbleState.Processing) {
             return false
         }
-        _state.value = BubbleState.Listening(0f, latestPartialText)
+        _state.value = BubbleState.Listening(0f, latestPartialText, isContinuous)
         return true
     }
 

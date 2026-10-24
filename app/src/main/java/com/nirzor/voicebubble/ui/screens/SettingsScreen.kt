@@ -128,6 +128,10 @@ fun SettingsScreen(
     val polishStyle by prefs.polishStyle.collectAsState()
     val directGeminiAudio by prefs.directGeminiAudio.collectAsState()
     val retentionDays by prefs.historyRetentionDays.collectAsState()
+    val directInject by prefs.directInject.collectAsState()
+    val continuousMode by prefs.continuousMode.collectAsState()
+    val autoPunctuation by prefs.autoPunctuation.collectAsState()
+    val customPolishPrompt by prefs.customPolishPrompt.collectAsState()
 
     val currentTheme = remember(bubbleColorTheme) { BubbleThemes.getThemeById(bubbleColorTheme) }
     val currentLang = remember(selectedLangCode) { SupportedLanguages.getLanguageByCode(selectedLangCode) }
@@ -464,14 +468,15 @@ fun SettingsScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             PolishStyle.entries.forEach { style ->
                                 val isSelected = polishStyle == style
                                 Surface(
                                     modifier = Modifier
-                                        .weight(1f)
                                         .clickable { prefs.setPolishStyle(style) },
                                     shape = RoundedCornerShape(10.dp),
                                     color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
@@ -481,7 +486,7 @@ fun SettingsScreen(
                                     )
                                 ) {
                                     Column(
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                                         horizontalAlignment = Alignment.CenterHorizontally
                                     ) {
                                         Text(
@@ -499,6 +504,19 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+
+                        if (polishStyle == PolishStyle.CUSTOM) {
+                            OutlinedTextField(
+                                value = customPolishPrompt,
+                                onValueChange = { prefs.setCustomPolishPrompt(it) },
+                                label = { Text("কাস্টম প্রম্পট নির্দেশনা (Custom Prompt)") },
+                                placeholder = { Text("যেমন: বাক্যের প্রমিত ভাব বজায় রেখে সংক্ষেপে লিখুন") },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 2,
+                                maxLines = 4,
+                                shape = RoundedCornerShape(10.dp)
+                            )
+                        }
                     }
                 }
 
@@ -812,6 +830,48 @@ fun SettingsScreen(
                 subtitle = "${currentLang.flag} ${currentLang.displayName}",
                 icon = Icons.Default.Language,
                 onClick = { showLanguageDialog = true }
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            SettingsSwitchRow(
+                title = stringResource(R.string.settings_direct_inject_title),
+                description = stringResource(R.string.settings_direct_inject_desc),
+                icon = Icons.Default.Layers,
+                checked = directInject,
+                onCheckedChange = { enabled ->
+                    prefs.setDirectInject(enabled)
+                    if (enabled && !com.nirzor.voicebubble.service.VoiceBubbleAccessibilityService.isServiceEnabled.value) {
+                        try {
+                            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            })
+                            Toast.makeText(context, "Voice Bubble Accessibility Service টি চালু করুন", Toast.LENGTH_LONG).show()
+                        } catch (e: Exception) {
+                            android.util.Log.w("SettingsScreen", "Cannot open accessibility settings", e)
+                        }
+                    }
+                }
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            SettingsSwitchRow(
+                title = stringResource(R.string.settings_continuous_mode_title),
+                description = stringResource(R.string.settings_continuous_mode_desc),
+                icon = Icons.Default.Mic,
+                checked = continuousMode,
+                onCheckedChange = { prefs.setContinuousMode(it) }
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            SettingsSwitchRow(
+                title = stringResource(R.string.settings_auto_punctuation_title),
+                description = stringResource(R.string.settings_auto_punctuation_desc),
+                icon = Icons.Default.AutoAwesome,
+                checked = autoPunctuation,
+                onCheckedChange = { prefs.setAutoPunctuation(it) }
             )
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))

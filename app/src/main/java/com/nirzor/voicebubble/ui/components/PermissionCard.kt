@@ -70,6 +70,19 @@ fun PermissionCard(
         }
     }
 
+    val isAccessibilityEnabled = remember(hasOverlayPermission, hasMicPermission) {
+        try {
+            val enabledServices = Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ) ?: ""
+            enabledServices.contains(context.packageName) ||
+                com.nirzor.voicebubble.service.VoiceBubbleAccessibilityService.isServiceEnabled.value
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     val manufacturer = Build.MANUFACTURER.lowercase()
     val isVendorNeedingAutostart = remember {
         manufacturer.contains("xiaomi") ||
@@ -164,6 +177,26 @@ fun PermissionCard(
                     testTag = "perm_battery_btn"
                 )
             }
+
+            // 5. Direct Text Injection Accessibility Service (Optional)
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            PermissionItem(
+                icon = Icons.Default.Layers,
+                title = stringResource(R.string.perm_accessibility_title),
+                desc = stringResource(R.string.perm_accessibility_desc),
+                isGranted = isAccessibilityEnabled,
+                onRequest = {
+                    try {
+                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "Accessibility সেটিংস খোলা যায়নি", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                testTag = "perm_a11y_btn"
+            )
 
             // 5. Vendor Autostart Guide (Xiaomi/POCO/Oppo/Vivo/Realme)
             if (isVendorNeedingAutostart) {

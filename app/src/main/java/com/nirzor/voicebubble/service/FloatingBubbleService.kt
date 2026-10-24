@@ -47,6 +47,8 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.EditText
+import android.view.inputmethod.InputMethodManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.nirzor.voicebubble.MainActivity
@@ -69,6 +71,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 import kotlin.math.hypot
 
@@ -90,6 +93,22 @@ class FloatingBubbleService : Service() {
     private var pulseRing: View? = null
     private var previewPill: LinearLayout? = null
     private var previewPillText: TextView? = null
+    private var resultActionBar: LinearLayout? = null
+    private var inlineEditLayout: LinearLayout? = null
+    private var inlineEditText: EditText? = null
+    private var inlineEditDoneBtn: TextView? = null
+    private var btnRaw: TextView? = null
+    private var btnPolish: TextView? = null
+    private var btnDiscard: TextView? = null
+    private var btnEdit: TextView? = null
+
+    private var previousClip: ClipData? = null
+    private var activeRawTranscript: String = ""
+    private var activePolishedTranscript: String? = null
+    private var isInlineEditing: Boolean = false
+    private val actionPillDismissRunnable = Runnable {
+        hideResultActionPill()
+    }
     private var copiedBadge: LinearLayout? = null
     private var copiedBadgeText: TextView? = null
     private var removeTargetView: FrameLayout? = null
@@ -414,10 +433,10 @@ class FloatingBubbleService : Service() {
         bubbleContainer?.addView(pulseRing)
         bubbleContainer?.addView(bubbleCircle)
 
-        // Partial text preview pill
+        // Partial text preview pill & inline editor container
         previewPill = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
@@ -429,10 +448,40 @@ class FloatingBubbleService : Service() {
         previewPillText = TextView(this).apply {
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            maxLines = 2
+            maxLines = 4
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
         previewPill?.addView(previewPillText)
+
+        // Inline edit layout
+        inlineEditLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+        }
+        inlineEditText = EditText(this).apply {
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setBackgroundColor(Color.TRANSPARENT)
+            minWidth = dpToPx(120)
+            maxWidth = dpToPx(220)
+            maxLines = 3
+        }
+        inlineEditDoneBtn = TextView(this).apply {
+            text = "✓"
+            setTextColor(Color.parseColor("#10B981"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setPadding(dpToPx(6), dpToPx(4), dpToPx(6), dpToPx(4))
+            setOnClickListener {
+                finishInlineEditing(save = true)
+            }
+        }
+        inlineEditLayout?.addView(inlineEditText)
+        inlineEditLayout?.addView(inlineEditDoneBtn)
+        previewPill?.addView(inlineEditLayout)
+
+        // Result action bar
+        resultActionBar = initResultActionBar()
 
         // Copied badge pill
         copiedBadge = LinearLayout(this).apply {
@@ -467,6 +516,7 @@ class FloatingBubbleService : Service() {
             gravity = Gravity.CENTER_HORIZONTAL
             addView(copiedBadge)
             addView(previewPill)
+            addView(resultActionBar)
             addView(bubbleContainer)
             addView(quickMenuCard, quickMenuParams)
         }
@@ -711,17 +761,42 @@ class FloatingBubbleService : Service() {
         }
     }
 
+    private fun deliverText(text: String, isPolished: Boolean = false): Boolean {
+        if (text.isBlank()) return false
+        var injected = false
+        if (appPreferences.directInject.value && VoiceBubbleAccessibilityService.isServiceEnabled.value) {
+            injected = VoiceBubbleAccessibilityService.injectText(text)
+        }
+        if (!injected && appPreferences.autoCopy.value) {
+            val clip = ClipData.newPlainText("Voice Transcription", text)
+            clipboardManager.setPrimaryClip(clip)
+        }
+        latestTranscript = text
+        UndoRedoManager.recordInput(this, text)
+        return injected
+    }
+
     private fun startListeningSession() {
         cancelAutoDismiss()
+        hideResultActionPill()
         copiedBadge?.visibility = View.GONE
+        try {
+            previousClip = clipboardManager.primaryClip
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to capture clipboard snapshot", e)
+        }
         speechEngine.startSession(
             languageCode = appPreferences.selectedLanguage.value,
             playTone = appPreferences.soundFeedback.value,
             enableHaptic = appPreferences.hapticFeedback.value,
+            continuousMode = appPreferences.continuousMode.value,
             onPartialResult = { partial ->
                 latestPartialTranscript = partial
                 mainHandler.post {
                     previewPill?.visibility = View.VISIBLE
+                    resultActionBar?.visibility = View.GONE
+                    previewPillText?.visibility = View.VISIBLE
+                    inlineEditLayout?.visibility = View.GONE
                     previewPillText?.text = partial
                 }
             },
@@ -731,6 +806,9 @@ class FloatingBubbleService : Service() {
             onErrorOccurred = { errorMsg, _ ->
                 mainHandler.post {
                     previewPill?.visibility = View.VISIBLE
+                    resultActionBar?.visibility = View.GONE
+                    previewPillText?.visibility = View.VISIBLE
+                    inlineEditLayout?.visibility = View.GONE
                     previewPillText?.maxLines = 5
                     previewPillText?.text = if (latestPartialTranscript.isBlank()) {
                         errorMsg
@@ -743,75 +821,251 @@ class FloatingBubbleService : Service() {
         if (speechEngine.speechState.value is BubbleState.Listening) {
             latestPartialTranscript = ""
             previewPill?.visibility = View.GONE
-            previewPillText?.maxLines = 2
+            previewPillText?.maxLines = 4
         }
     }
 
     private fun handleFinalSpeechResult(rawText: String, lang: String, durationMs: Long) {
         cancelAutoDismiss()
-        serviceScope.launch {
-            val aiEnabled = appPreferences.aiPolishEnabled.value
-            val style = appPreferences.polishStyle.value
-            val polishedText = if (aiEnabled) {
-                withContext(Dispatchers.IO) {
-                    GeminiApiClient.polishText(this@FloatingBubbleService, rawText, style)
-                }
-            } else {
-                null
-            }
+        val rawTrimmed = rawText.trim()
+        if (rawTrimmed.isBlank()) return
 
-            val finalText = (polishedText ?: rawText).trim()
-            latestTranscript = finalText
+        // 1. Deliver raw immediately
+        val injected = deliverText(rawTrimmed)
+        val initialBadgeMsg = if (injected) "সরাসরি ইনসার্ট ✓" else getString(R.string.bubble_state_copied)
+        speechEngine.stateMachine.moveToDone(rawTrimmed, null, true)
 
-            // Copy to clipboard
-            if (appPreferences.autoCopy.value && finalText.isNotBlank()) {
-                val clip = ClipData.newPlainText("Voice Transcription", finalText)
-                clipboardManager.setPrimaryClip(clip)
-            }
-
-            // Undo / Redo tracking
-            UndoRedoManager.recordInput(this@FloatingBubbleService, finalText)
-
-            // Save to Room DB
+        var historyEntity = VoiceHistoryEntity(
+            text = rawTrimmed,
+            language = lang,
+            durationMs = durationMs,
+            rawText = rawTrimmed,
+            polishedText = null,
+            createdAt = System.currentTimeMillis()
+        )
+        serviceScope.launch(Dispatchers.IO) {
             try {
-                VoiceBubbleApp.instance.repository.insert(
-                    VoiceHistoryEntity(
-                        text = finalText,
-                        language = lang,
-                        durationMs = durationMs,
-                        rawText = rawText,
-                        polishedText = polishedText,
-                        createdAt = System.currentTimeMillis()
-                    )
-                )
+                VoiceBubbleApp.instance.repository.insert(historyEntity)
             } catch (e: Exception) {
                 Log.e(TAG, "Error saving history", e)
             }
+        }
 
-            speechEngine.stateMachine.moveToDone(rawText, polishedText, true)
+        mainHandler.post {
+            showTemporaryBadge(initialBadgeMsg, isAi = false)
+            showResultActionPill(rawText = rawTrimmed, initialPolished = null)
+        }
 
-            val isAiUsed = !polishedText.isNullOrBlank()
-            val badgeMsg = if (isAiUsed) {
-                "✨ AI পলিশ কপি হয়েছে! ✓"
-            } else {
-                getString(R.string.bubble_state_copied)
-            }
+        // 2. Background polish upgrade
+        val aiEnabled = appPreferences.aiPolishEnabled.value
+        val style = appPreferences.polishStyle.value
+        if (aiEnabled && rawTrimmed.length > 15) {
+            serviceScope.launch {
+                val polished = withTimeoutOrNull(8_000L) {
+                    GeminiApiClient.polishText(
+                        this@FloatingBubbleService,
+                        rawTrimmed,
+                        style,
+                        appPreferences.customPolishPrompt.value
+                    )
+                }?.trim()
 
-            // Show copied badge
-            mainHandler.post {
-                previewPill?.visibility = View.GONE
-                showTemporaryBadge(badgeMsg, isAi = isAiUsed)
-            }
-
-            delay(2500L)
-            mainHandler.post {
-                // Do not reset a newer session that the user started while the badge was visible.
-                if (speechEngine.speechState.value is BubbleState.Done) {
-                    speechEngine.stateMachine.resetToIdle()
+                if (!polished.isNullOrBlank() && polished != rawTrimmed) {
+                    val polInjected = deliverText(polished, isPolished = true)
+                    val polBadge = if (polInjected) "✨ পলিশ ইনসার্ট ✓" else "✨ পলিশ ✓"
+                    mainHandler.post {
+                        showTemporaryBadge(polBadge, isAi = true)
+                        updateResultActionPillPolished(polished)
+                    }
+                    withContext(Dispatchers.IO) {
+                        try {
+                            historyEntity = historyEntity.copy(text = polished, polishedText = polished)
+                            VoiceBubbleApp.instance.repository.update(historyEntity)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error updating history with polished text", e)
+                        }
+                    }
                 }
-                scheduleAutoDismiss()
             }
         }
+    }
+
+    private fun createActionButton(label: String, textColorHex: String, onClick: () -> Unit): TextView {
+        return TextView(this).apply {
+            text = label
+            setTextColor(Color.parseColor(textColorHex))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpToPx(10).toFloat()
+                setColor(Color.parseColor("#374151"))
+            }
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun initResultActionBar(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dpToPx(6), dpToPx(4), dpToPx(6), dpToPx(4))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpToPx(14).toFloat()
+                setColor(Color.parseColor("#E0111827"))
+            }
+            visibility = View.GONE
+
+            btnRaw = createActionButton(getString(R.string.action_raw), "#9CA3AF") {
+                if (activeRawTranscript.isNotBlank()) {
+                    deliverText(activeRawTranscript)
+                    showTemporaryBadge("কাঁচা কপি ✓", isAi = false)
+                    resetActionPillTimeout(2000L)
+                }
+            }
+
+            btnPolish = createActionButton(getString(R.string.action_polish), "#C084FC") {
+                val polished = activePolishedTranscript
+                if (!polished.isNullOrBlank()) {
+                    deliverText(polished, isPolished = true)
+                    showTemporaryBadge("✨ পলিশ কপি ✓", isAi = true)
+                    resetActionPillTimeout(2000L)
+                } else if (activeRawTranscript.isNotBlank()) {
+                    btnPolish?.text = "..."
+                    serviceScope.launch {
+                        val newPolished = withTimeoutOrNull(8_000L) {
+                            GeminiApiClient.polishText(
+                                this@FloatingBubbleService,
+                                activeRawTranscript,
+                                appPreferences.polishStyle.value,
+                                appPreferences.customPolishPrompt.value
+                            )
+                        }?.trim()
+                        mainHandler.post {
+                            btnPolish?.text = getString(R.string.action_polish)
+                            if (!newPolished.isNullOrBlank() && newPolished != activeRawTranscript) {
+                                updateResultActionPillPolished(newPolished)
+                                deliverText(newPolished, isPolished = true)
+                                showTemporaryBadge("✨ পলিশ ✓", isAi = true)
+                            }
+                            resetActionPillTimeout(2000L)
+                        }
+                    }
+                }
+            }
+
+            btnDiscard = createActionButton(getString(R.string.action_discard), "#F87171") {
+                try {
+                    previousClip?.let { clipboardManager.setPrimaryClip(it) }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error restoring previous clip", e)
+                }
+                showTemporaryBadge("বাতিল ✓", isAi = false)
+                hideResultActionPill()
+            }
+
+            btnEdit = createActionButton(getString(R.string.action_edit), "#60A5FA") {
+                startInlineEditing()
+            }
+
+            val marginParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(dpToPx(3), 0, dpToPx(3), 0)
+            }
+
+            addView(btnRaw, marginParams)
+            addView(btnPolish, marginParams)
+            addView(btnDiscard, marginParams)
+            addView(btnEdit, marginParams)
+        }
+    }
+
+    private fun showResultActionPill(rawText: String, initialPolished: String?) {
+        activeRawTranscript = rawText
+        activePolishedTranscript = initialPolished
+        previewPillText?.text = initialPolished ?: rawText
+        previewPill?.visibility = View.VISIBLE
+        resultActionBar?.visibility = View.VISIBLE
+        btnPolish?.visibility = if (appPreferences.aiPolishEnabled.value) View.VISIBLE else View.GONE
+
+        mainHandler.removeCallbacks(actionPillDismissRunnable)
+        mainHandler.postDelayed(actionPillDismissRunnable, 5000L)
+    }
+
+    private fun updateResultActionPillPolished(polished: String) {
+        activePolishedTranscript = polished
+        if (!isInlineEditing) {
+            previewPillText?.text = polished
+        }
+    }
+
+    private fun hideResultActionPill() {
+        if (isInlineEditing) {
+            finishInlineEditing(save = false)
+        }
+        mainHandler.removeCallbacks(actionPillDismissRunnable)
+        resultActionBar?.visibility = View.GONE
+        previewPill?.visibility = View.GONE
+        if (speechEngine.speechState.value is BubbleState.Done) {
+            speechEngine.stateMachine.resetToIdle()
+        }
+        scheduleAutoDismiss()
+    }
+
+    private fun startInlineEditing() {
+        isInlineEditing = true
+        mainHandler.removeCallbacks(actionPillDismissRunnable)
+        previewPillText?.visibility = View.GONE
+        inlineEditLayout?.visibility = View.VISIBLE
+        val textToEdit = activePolishedTranscript ?: activeRawTranscript
+        inlineEditText?.setText(textToEdit)
+        inlineEditText?.setSelection(textToEdit.length)
+
+        windowParams.flags = windowParams.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+        try {
+            windowManager.updateViewLayout(floatingRootView, windowParams)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to make window focusable for editing", e)
+        }
+
+        inlineEditText?.requestFocus()
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.showSoftInput(inlineEditText, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    private fun finishInlineEditing(save: Boolean) {
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        inlineEditText?.let { imm?.hideSoftInputFromWindow(it.windowToken, 0) }
+
+        windowParams.flags = windowParams.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        try {
+            windowManager.updateViewLayout(floatingRootView, windowParams)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to restore window flags after editing", e)
+        }
+
+        if (save) {
+            val edited = inlineEditText?.text?.toString()?.trim().orEmpty()
+            if (edited.isNotBlank()) {
+                activePolishedTranscript = edited
+                previewPillText?.text = edited
+                deliverText(edited)
+                showTemporaryBadge("এডিট কপি ✓", isAi = false)
+            }
+        }
+
+        inlineEditLayout?.visibility = View.GONE
+        previewPillText?.visibility = View.VISIBLE
+        isInlineEditing = false
+        resetActionPillTimeout(3000L)
+    }
+
+    private fun resetActionPillTimeout(timeoutMs: Long) {
+        mainHandler.removeCallbacks(actionPillDismissRunnable)
+        mainHandler.postDelayed(actionPillDismissRunnable, timeoutMs)
     }
 
     private fun observeBubbleState() {
@@ -1351,6 +1605,7 @@ class FloatingBubbleService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         cancelAutoDismiss()
+        mainHandler.removeCallbacks(actionPillDismissRunnable)
         dockingAnimator?.cancel()
         longPressRunnable?.let { mainHandler.removeCallbacks(it) }
         hideBadgeJob?.cancel()
