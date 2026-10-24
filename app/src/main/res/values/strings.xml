@@ -171,9 +171,9 @@
     <string name="gemini_test_timeout">API অনুরোধের সময়সীমা পেরিয়েছে। আবার চেষ্টা করুন।</string>
     <string name="gemini_test_network_error">API সার্ভিসে সংযোগ করা যায়নি। সংযোগ যাচাই করে আবার চেষ্টা করুন।</string>
     <string name="gemini_test_unknown_error">API পরীক্ষা সম্পন্ন হয়নি। পরে আবার চেষ্টা করুন; key অবৈধ বলে নিশ্চিত করা যায়নি।</string>
-    <string name="gemini_direct_audio_title">Direct Gemini Audio (Experimental / পরীক্ষামূলক)</string>
-    <string name="gemini_direct_audio_desc">স্পিচ রিকগনাইজারের বদলে সরাসরি অডিও পাঠিয়ে ট্রান্সক্রিপশন (পরিকল্পিত)</string>
-    <string name="gemini_direct_audio_disabled_notice">বর্তমানে পরীক্ষামূলক পর্যায়ে রয়েছে (Default OFF)</string>
+    <string name="gemini_direct_audio_title">Gemini Live Audio (WebSocket স্ট্রিমিং)</string>
+    <string name="gemini_direct_audio_desc">স্পিচ রিকগনাইজারের বদলে সরাসরি Gemini Live-এ রিয়েল-টাইম অডিও পাঠিয়ে স্মার্ট ট্রান্সক্রিপশন</string>
+    <string name="gemini_direct_audio_disabled_notice">অন থাকলে সরাসরি gemini-3.5-transcribe-live দিয়ে দ্রুত ও স্মার্ট ট্রান্সক্রিপশন হবে। এপিআই কি না থাকলে বা ত্রুটি হলে স্বয়ংক্রিয়ভাবে লোকাল ইঞ্জিনে চলবে।</string>
 
     <!-- Process Text Activity -->
     <string name="process_text_title">Voice Bubble Text Action</string>

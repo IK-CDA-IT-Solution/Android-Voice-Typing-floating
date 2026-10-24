@@ -937,12 +937,15 @@ class FloatingBubbleService : Service() {
         } catch (e: Exception) {
             Log.w(TAG, "Failed to capture clipboard snapshot", e)
         }
+        val hasKey = com.nirzor.voicebubble.data.SecureKeyManager.getInstance(this).getGeminiApiKey()?.isNotBlank() == true
+        val useLive = appPreferences.directGeminiAudio.value && hasKey
         speechEngine.startSession(
             languageCode = appPreferences.selectedLanguage.value,
             playTone = appPreferences.soundFeedback.value,
             enableHaptic = appPreferences.hapticFeedback.value,
             continuousMode = appPreferences.continuousMode.value,
             autoPunctuation = appPreferences.autoPunctuation.value,
+            useDirectGeminiLive = useLive,
             onPartialResult = { partial ->
                 latestPartialTranscript = partial
                 mainHandler.post {
@@ -983,9 +986,16 @@ class FloatingBubbleService : Service() {
         val rawTrimmed = rawText.trim()
         if (rawTrimmed.isBlank()) return
 
+        val isLive = speechEngine.wasLastSessionGeminiLive()
         // 1. Deliver raw immediately
         val injected = deliverText(rawTrimmed)
-        val initialBadgeMsg = if (injected) "সরাসরি ইনসার্ট ✓" else getString(R.string.bubble_state_copied)
+        val initialBadgeMsg = if (injected) {
+            "সরাসরি ইনসার্ট ✓"
+        } else if (isLive) {
+            "✨ জেমিনি লাইভ ✓"
+        } else {
+            getString(R.string.bubble_state_copied)
+        }
         speechEngine.stateMachine.moveToDone(rawTrimmed, null, true)
 
         var historyEntity = VoiceHistoryEntity(
@@ -993,7 +1003,7 @@ class FloatingBubbleService : Service() {
             language = lang,
             durationMs = durationMs,
             rawText = rawTrimmed,
-            polishedText = null,
+            polishedText = if (isLive) rawTrimmed else null,
             createdAt = System.currentTimeMillis()
         )
         serviceScope.launch(Dispatchers.IO) {
@@ -1005,9 +1015,12 @@ class FloatingBubbleService : Service() {
         }
 
         mainHandler.post {
-            showTemporaryBadge(initialBadgeMsg, isAi = false)
-            showResultActionPill(rawText = rawTrimmed, initialPolished = null)
+            showTemporaryBadge(initialBadgeMsg, isAi = isLive)
+            showResultActionPill(rawText = rawTrimmed, initialPolished = if (isLive) rawTrimmed else null)
         }
+
+        // If transcribed smartly by Gemini Live, no second REST polish call is needed
+        if (isLive) return
 
         // 2. Background polish upgrade
         val aiEnabled = appPreferences.aiPolishEnabled.value

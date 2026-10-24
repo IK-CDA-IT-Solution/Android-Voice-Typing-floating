@@ -66,6 +66,13 @@ class SpeechEngine(private val context: Context) {
     private var vibrator: Vibrator? = null
     private var audioFocusRequest: AudioFocusRequest? = null
 
+    private val geminiLiveAudioEngine = GeminiLiveAudioEngine(context)
+    @Volatile private var isUsingGeminiLive = false
+    @Volatile private var wasLastSessionGeminiLive = false
+
+    fun isCurrentlyUsingGeminiLive(): Boolean = isUsingGeminiLive
+    fun wasLastSessionGeminiLive(): Boolean = wasLastSessionGeminiLive
+
     private var accumulatedText = StringBuilder()
     private var isContinuousSessionActive = false
     private var isManualStopPending = false
@@ -163,6 +170,7 @@ class SpeechEngine(private val context: Context) {
         enableHaptic: Boolean = true,
         continuousMode: Boolean = false,
         autoPunctuation: Boolean = true,
+        useDirectGeminiLive: Boolean = false,
         onPartialResult: ((String) -> Unit)? = null,
         onFinalResult: ((rawText: String, lang: String, durationMs: Long) -> Unit)? = null,
         onErrorOccurred: ((errorMessage: String, errorCode: Int) -> Unit)? = null
@@ -210,6 +218,74 @@ class SpeechEngine(private val context: Context) {
             return
         }
 
+        if (useDirectGeminiLive) {
+            val apiKey = com.nirzor.voicebubble.data.SecureKeyManager.getInstance(context).getGeminiApiKey()
+            if (!apiKey.isNullOrBlank()) {
+                wasLastSessionGeminiLive = false
+        if (!stateMachine.startListening(isContinuous = continuousMode)) return
+
+                if (enableHaptic) triggerHaptic(50)
+                if (playTone) playBeep(ToneGenerator.TONE_PROP_BEEP)
+
+                isUsingGeminiLive = true
+                hasRetriedBusy = false
+                hasRetriedOnline = false
+                hasRetriedOnDevice = false
+                stopWatchdogRunnable?.let { mainHandler.removeCallbacks(it); stopWatchdogRunnable = null }
+                isContinuousSessionActive = continuousMode
+                isManualStopPending = false
+                accumulatedText.clear()
+                sessionStartTimeMs = System.currentTimeMillis()
+                activeLanguageCode = languageCode
+                activeAutoPunctuation = autoPunctuation
+                activeOnFinalResult = onFinalResult
+                activeOnErrorOccurred = onErrorOccurred
+
+                invalidatePendingStart()
+                cleanupRecognizer()
+
+                val started = geminiLiveAudioEngine.startListening(
+                    languageCode = languageCode,
+                    apiKey = apiKey,
+                    onRmsChanged = { rmsdB ->
+                        stateMachine.updateRms(rmsdB)
+                    },
+                    onPartialResult = { partial ->
+                        onPartialResult?.invoke(partial)
+                    },
+                    onFinalResult = { text, lang, durMs ->
+                        mainHandler.post {
+                            wasLastSessionGeminiLive = true
+                            isUsingGeminiLive = false
+                            stateMachine.moveToDone(text, null, true)
+                            onFinalResult?.invoke(text, lang, durMs)
+                        }
+                    },
+                    onErrorOccurred = { errorMsg, errCode ->
+                        mainHandler.post {
+                            Log.w(TAG, "Gemini Live error: $errorMsg ($errCode), falling back to local SpeechRecognizer")
+                            isUsingGeminiLive = false
+                            scheduleRecognizerStart(
+                                delayMillis = 0L,
+                                languageCode = languageCode,
+                                playTone = false,
+                                enableHaptic = false,
+                                onPartialResult = onPartialResult,
+                                onFinalResult = onFinalResult,
+                                onErrorOccurred = onErrorOccurred,
+                                isRetry = true,
+                                forceOnDevice = !defaultRecognizerAvailable || (circuitOpen && onDeviceRecognizerAvailable),
+                                continuousMode = continuousMode
+                            )
+                        }
+                    }
+                )
+                if (started) return
+                isUsingGeminiLive = false
+            }
+        }
+
+        wasLastSessionGeminiLive = false
         if (!stateMachine.startListening(isContinuous = continuousMode)) return
 
         hasRetriedBusy = false
@@ -658,6 +734,11 @@ class SpeechEngine(private val context: Context) {
     fun stopSession() {
         mainHandler.post {
             mainHandler.removeCallbacks(processingTimeoutRunnable)
+            if (isUsingGeminiLive) {
+                geminiLiveAudioEngine.stopListening()
+                stateMachine.moveToProcessing()
+                return@post
+            }
             if (isStartPending) {
                 invalidatePendingStart()
                 cleanupRecognizer()
@@ -710,6 +791,10 @@ class SpeechEngine(private val context: Context) {
     fun cancelSession() {
         mainHandler.post {
             mainHandler.removeCallbacks(processingTimeoutRunnable)
+            if (isUsingGeminiLive) {
+                geminiLiveAudioEngine.cancelSession()
+                isUsingGeminiLive = false
+            }
             stopWatchdogRunnable?.let { mainHandler.removeCallbacks(it); stopWatchdogRunnable = null }
             isContinuousSessionActive = false
             isManualStopPending = false
@@ -723,6 +808,11 @@ class SpeechEngine(private val context: Context) {
     fun destroy() {
         mainHandler.post {
             mainHandler.removeCallbacks(processingTimeoutRunnable)
+            if (isUsingGeminiLive) {
+                geminiLiveAudioEngine.cancelSession()
+                isUsingGeminiLive = false
+            }
+            geminiLiveAudioEngine.destroy()
             stopWatchdogRunnable?.let { mainHandler.removeCallbacks(it); stopWatchdogRunnable = null }
             isContinuousSessionActive = false
             isManualStopPending = false
