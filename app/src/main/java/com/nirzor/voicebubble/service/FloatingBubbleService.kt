@@ -1026,7 +1026,7 @@ class FloatingBubbleService : Service() {
 
         windowParams.flags = windowParams.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
         try {
-            windowManager.updateViewLayout(floatingRootView, windowParams)
+            windowManager?.updateViewLayout(floatingRootView, windowParams)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to make window focusable for editing", e)
         }
@@ -1042,7 +1042,7 @@ class FloatingBubbleService : Service() {
 
         windowParams.flags = windowParams.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
         try {
-            windowManager.updateViewLayout(floatingRootView, windowParams)
+            windowManager?.updateViewLayout(floatingRootView, windowParams)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to restore window flags after editing", e)
         }
