@@ -1,7 +1,5 @@
 package com.nirzor.voicebubble.speech
 
-import java.text.Normalizer
-
 data class VoiceCommandResult(
     val processedText: String,
     val isCopyCommandTriggered: Boolean = false,
@@ -12,16 +10,18 @@ data class VoiceCommandResult(
 object VoiceCommandProcessor {
 
     private val punctuations = listOf(
-        Normalizer.normalize("দাঁড়ি", Normalizer.Form.NFC) to "।",
-        Normalizer.normalize("দাঁড়ি", Normalizer.Form.NFC) to "।",
-        Normalizer.normalize("দাড়ি", Normalizer.Form.NFC) to "।",
-        Normalizer.normalize("দাড়ি", Normalizer.Form.NFC) to "।",
-        Normalizer.normalize("কমা", Normalizer.Form.NFC) to ",",
-        Normalizer.normalize("প্রশ্নবোধক", Normalizer.Form.NFC) to "?",
-        Normalizer.normalize("প্রশ্নচিহ্ন", Normalizer.Form.NFC) to "?",
-        Normalizer.normalize("নতুন প্যারা", Normalizer.Form.NFC) to "\n\n",
-        Normalizer.normalize("নতুন লাইন", Normalizer.Form.NFC) to "\n",
-        Normalizer.normalize("ফুল স্টপ", Normalizer.Form.NFC) to "।",
+        "দাঁড়ি" to "।",
+        "দাঁ\u09a1\u09bcি" to "।",
+        "দাঁড়ি" to "।",
+        "দাড়ি" to "।",
+        "দা\u09a1\u09bcি" to "।",
+        "দাড়ি" to "।",
+        "কমা" to ",",
+        "প্রশ্নবোধক" to "?",
+        "প্রশ্নচিহ্ন" to "?",
+        "নতুন প্যারা" to "\n\n",
+        "নতুন লাইন" to "\n",
+        "ফুল স্টপ" to "।",
         "full stop" to ".",
         "period" to ".",
         "comma" to ",",
@@ -33,7 +33,7 @@ object VoiceCommandProcessor {
     fun process(text: String): VoiceCommandResult {
         if (text.isBlank()) return VoiceCommandResult(text)
 
-        var result = Normalizer.normalize(text.trim(), Normalizer.Form.NFC)
+        var result = text.trim()
         val lower = result.lowercase()
 
         // 1. Standalone action commands
@@ -53,9 +53,8 @@ object VoiceCommandProcessor {
         // 2. Check if utterance ends with "কপি করো" / "copy that"
         val copySuffixes = listOf("কপি করো", "কপি কর", "copy that", "copy now")
         for (suffix in copySuffixes) {
-            val normSuffix = Normalizer.normalize(suffix, Normalizer.Form.NFC)
-            if (result.endsWith(normSuffix, ignoreCase = true)) {
-                result = result.substring(0, result.length - normSuffix.length).trim()
+            if (result.endsWith(suffix, ignoreCase = true)) {
+                result = result.substring(0, result.length - suffix.length).trim()
                 copyTriggered = true
                 break
             }
@@ -64,9 +63,8 @@ object VoiceCommandProcessor {
         // 3. Check if utterance ends with "মুছো" / "delete that"
         val deleteLastWordSuffixes = listOf("মুছো", "মুছে ফেলো", "delete that", "delete last word")
         for (suffix in deleteLastWordSuffixes) {
-            val normSuffix = Normalizer.normalize(suffix, Normalizer.Form.NFC)
-            if (result.endsWith(normSuffix, ignoreCase = true)) {
-                val base = result.substring(0, result.length - normSuffix.length).trim()
+            if (result.endsWith(suffix, ignoreCase = true)) {
+                val base = result.substring(0, result.length - suffix.length).trim()
                 if (base.isBlank()) {
                     result = ""
                     deleteTriggered = true
