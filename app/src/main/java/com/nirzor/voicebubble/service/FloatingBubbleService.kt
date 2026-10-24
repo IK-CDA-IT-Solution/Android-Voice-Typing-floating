@@ -448,17 +448,26 @@ class FloatingBubbleService : Service() {
         previewPill = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 0, dpToPx(6))
+            }
+            minimumWidth = dpToPx(140)
+            setPadding(dpToPx(14), dpToPx(8), dpToPx(14), dpToPx(8))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dpToPx(16).toFloat()
-                setColor(Color.parseColor("#E0111827"))
+                setColor(Color.parseColor("#F0111827"))
             }
             visibility = View.GONE
         }
         previewPillText = TextView(this).apply {
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            maxWidth = dpToPx(260)
+            gravity = Gravity.CENTER
             maxLines = 4
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
@@ -965,11 +974,16 @@ class FloatingBubbleService : Service() {
                     resultActionBar?.visibility = View.GONE
                     previewPillText?.visibility = View.VISIBLE
                     inlineEditLayout?.visibility = View.GONE
-                    previewPillText?.maxLines = 5
-                    previewPillText?.text = if (latestPartialTranscript.isBlank()) {
-                        errorMsg
+                    previewPillText?.maxLines = 3
+                    val displayMsg = if (errorMsg.contains("সংযোগ করা যায়নি")) {
+                        "ইন্টারনেট সংযোগ নেই\n(Settings এ Gemini Live চালু করুন)"
                     } else {
-                        "${latestPartialTranscript.lineSequence().first().take(80)}\n$errorMsg"
+                        errorMsg.take(70)
+                    }
+                    previewPillText?.text = if (latestPartialTranscript.isBlank()) {
+                        displayMsg
+                    } else {
+                        "${latestPartialTranscript.lineSequence().first().take(60)}\n$displayMsg"
                     }
                 }
             }

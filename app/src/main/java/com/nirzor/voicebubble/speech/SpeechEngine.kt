@@ -586,6 +586,39 @@ class SpeechEngine(private val context: Context) {
                                 return
                             }
 
+                            // If local speech recognizer fails with network error, and Gemini API key is available,
+                            // smoothly fallback to Gemini Live Audio engine rather than failing.
+                            val geminiKey = com.nirzor.voicebubble.data.SecureKeyManager.getInstance(context).getGeminiApiKey()
+                            if (isNetworkFailure && !geminiKey.isNullOrBlank() && !isUsingGeminiLive) {
+                                Log.w(TAG, "Local speech recognizer failed with network error; trying Gemini Live fallback")
+                                invalidatePendingStart()
+                                cleanupRecognizer()
+                                isUsingGeminiLive = true
+                                val started = geminiLiveAudioEngine.startListening(
+                                    languageCode = languageCode,
+                                    apiKey = geminiKey,
+                                    onRmsChanged = { rmsdB -> stateMachine.updateRms(rmsdB) },
+                                    onPartialResult = { partial -> onPartialResult?.invoke(partial) },
+                                    onFinalResult = { text, lang, durMs ->
+                                        mainHandler.post {
+                                            wasLastSessionGeminiLive = true
+                                            isUsingGeminiLive = false
+                                            stateMachine.moveToDone(text, null, true)
+                                            onFinalResult?.invoke(text, lang, durMs)
+                                        }
+                                    },
+                                    onErrorOccurred = { gErr, gCode ->
+                                        mainHandler.post {
+                                            isUsingGeminiLive = false
+                                            stateMachine.moveToError(gErr, gCode)
+                                            onErrorOccurred?.invoke(gErr, gCode)
+                                        }
+                                    }
+                                )
+                                if (started) return
+                                isUsingGeminiLive = false
+                            }
+
                             // A non-network result/error indicates that the online provider is
                             // reachable again; clear the failure streak so the circuit can close.
                             if (!forceOnDevice && !isNetworkFailure) {

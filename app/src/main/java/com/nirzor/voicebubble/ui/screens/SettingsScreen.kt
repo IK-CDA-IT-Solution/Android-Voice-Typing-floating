@@ -590,46 +590,51 @@ fun SettingsScreen(
                     }
                 }
 
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Button(
-                        onClick = {
-                            if (apiKeyText.isBlank()) {
-                                testKeyState = KeyTestState.INVALID
-                                return@Button
-                            }
-                            testKeyState = KeyTestState.TESTING
-                            scope.launch {
-                                testKeyState = GeminiApiClient.testApiKey(apiKeyText.trim())
-                            }
-                        },
-                        enabled = testKeyState != KeyTestState.TESTING && apiKeyText.isNotBlank(),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.testTag("test_gemini_key_btn")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (testKeyState == KeyTestState.TESTING) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(stringResource(R.string.gemini_test_btn_testing))
-                        } else {
-                            Text(stringResource(R.string.gemini_test_btn_idle))
+                        Button(
+                            onClick = {
+                                if (apiKeyText.isBlank()) {
+                                    testKeyState = KeyTestState.INVALID
+                                    return@Button
+                                }
+                                testKeyState = KeyTestState.TESTING
+                                scope.launch {
+                                    val result = GeminiApiClient.testApiKey(apiKeyText.trim())
+                                    testKeyState = result
+                                    if (result == KeyTestState.VALID) {
+                                        prefs.setDirectGeminiAudio(true)
+                                    }
+                                }
+                            },
+                            enabled = testKeyState != KeyTestState.TESTING && apiKeyText.isNotBlank(),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.testTag("test_gemini_key_btn")
+                        ) {
+                            if (testKeyState == KeyTestState.TESTING) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(stringResource(R.string.gemini_test_btn_testing))
+                            } else {
+                                Text(stringResource(R.string.gemini_test_btn_idle))
+                            }
                         }
-                    }
 
-                    // Status pill
-                    when (testKeyState) {
-                        KeyTestState.VALID -> {
+                        if (testKeyState == KeyTestState.VALID) {
                             Text(
                                 text = stringResource(R.string.gemini_test_valid),
                                 color = Color(0xFF047857),
                                 fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.bodySmall
+                                style = MaterialTheme.typography.bodyMedium
                             )
-                        }
-                        KeyTestState.INVALID -> {
+                        } else if (testKeyState == KeyTestState.INVALID) {
                             Text(
                                 text = stringResource(R.string.gemini_test_invalid),
                                 color = MaterialTheme.colorScheme.error,
@@ -637,33 +642,42 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
-                        KeyTestState.AUTH_ERROR,
-                        KeyTestState.PERMISSION_ERROR,
-                        KeyTestState.MODEL_ERROR,
-                        KeyTestState.QUOTA_ERROR,
-                        KeyTestState.SERVER_ERROR,
-                        KeyTestState.REQUEST_ERROR,
-                        KeyTestState.NETWORK_ERROR,
-                        KeyTestState.TIMEOUT,
-                        KeyTestState.UNKNOWN_ERROR -> {
-                            Text(
-                                text = stringResource(when (testKeyState) {
-                                    KeyTestState.AUTH_ERROR -> R.string.gemini_test_auth_error
-                                    KeyTestState.PERMISSION_ERROR -> R.string.gemini_test_permission_error
-                                    KeyTestState.MODEL_ERROR -> R.string.gemini_test_model_error
-                                    KeyTestState.QUOTA_ERROR -> R.string.gemini_test_quota_error
-                                    KeyTestState.SERVER_ERROR -> R.string.gemini_test_server_error
-                                    KeyTestState.REQUEST_ERROR -> R.string.gemini_test_request_error
-                                    KeyTestState.TIMEOUT -> R.string.gemini_test_timeout
-                                    KeyTestState.NETWORK_ERROR -> R.string.gemini_test_network_error
-                                    else -> R.string.gemini_test_unknown_error
-                                }),
-                                color = Color(0xFFD97706),
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.bodySmall
-                            )
+                    }
+
+                    if (testKeyState != KeyTestState.IDLE && testKeyState != KeyTestState.TESTING && testKeyState != KeyTestState.VALID && testKeyState != KeyTestState.INVALID) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = stringResource(when (testKeyState) {
+                                        KeyTestState.AUTH_ERROR -> R.string.gemini_test_auth_error
+                                        KeyTestState.PERMISSION_ERROR -> R.string.gemini_test_permission_error
+                                        KeyTestState.MODEL_ERROR -> R.string.gemini_test_model_error
+                                        KeyTestState.QUOTA_ERROR -> R.string.gemini_test_quota_error
+                                        KeyTestState.SERVER_ERROR -> R.string.gemini_test_server_error
+                                        KeyTestState.REQUEST_ERROR -> R.string.gemini_test_request_error
+                                        KeyTestState.TIMEOUT -> R.string.gemini_test_timeout
+                                        KeyTestState.NETWORK_ERROR -> R.string.gemini_test_network_error
+                                        else -> R.string.gemini_test_unknown_error
+                                    }),
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
                         }
-                        else -> {}
                     }
                 }
 

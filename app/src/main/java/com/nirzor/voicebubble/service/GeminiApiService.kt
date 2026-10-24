@@ -40,7 +40,7 @@ data class PartItem(
 @JsonClass(generateAdapter = true)
 data class GenerationConfig(
     val temperature: Float? = 0.2f,
-    @Json(name = "thinkingConfig") val thinkingConfig: ThinkingConfig? = ThinkingConfig()
+    @Json(name = "thinkingConfig") val thinkingConfig: ThinkingConfig? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -59,7 +59,7 @@ data class CandidateItem(
 )
 
 interface GeminiApi {
-    @POST("v1beta/models/gemini-3.8-flash:generateContent")
+    @POST("v1beta/models/gemini-3.5-flash:generateContent")
     suspend fun generateContent(
         @Header("x-goog-api-key") apiKey: String,
         @Body request: GenerateContentRequest
@@ -244,15 +244,11 @@ object GeminiApiClient {
 
         val request = GenerateContentRequest(
             contents = listOf(
-                ContentItem(parts = listOf(PartItem(text = "<transcript>হ্যালো</transcript>")))
-            ),
-            systemInstruction = ContentItem(
-                parts = listOf(PartItem(text = getSystemPrompt(PolishStyle.STRICT_GRAMMAR)))
-            ),
-            generationConfig = GenerationConfig(temperature = 0.2f)
+                ContentItem(parts = listOf(PartItem(text = "ping")))
+            )
         )
 
-        val result = executeKeyTest(onHttpStatus = GeminiSafeLogger::logHttpStatus) {
+        val result = executeKeyTest(timeoutMillis = 15_000L, onHttpStatus = GeminiSafeLogger::logHttpStatus) {
             service.generateContent(apiKey = apiKey, request = request)
         }
         GeminiSafeLogger.logKeyTestResult(result)
