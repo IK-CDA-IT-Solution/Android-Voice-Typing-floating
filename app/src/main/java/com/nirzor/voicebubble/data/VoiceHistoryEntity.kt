@@ -3,7 +3,9 @@ package com.nirzor.voicebubble.data
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import com.squareup.moshi.JsonClass
 
+@JsonClass(generateAdapter = true)
 @Entity(tableName = "voice_history")
 data class VoiceHistoryEntity(
     @PrimaryKey(autoGenerate = true)

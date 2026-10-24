@@ -221,4 +221,15 @@
     <string name="action_polish">পলিশ</string>
     <string name="action_discard">বাতিল</string>
     <string name="action_edit">এডিট</string>
+
+    <!-- Sprint 2 (P1) Strings -->
+    <string name="quick_menu_title">⚡ কুইক মেনু (Quick Menu)</string>
+    <string name="quick_menu_lang_title">🌐 ভাষা: %1$s</string>
+    <string name="quick_menu_lang_desc">ট্যাপ করে ভাষা পরিবর্তন করুন</string>
+    <string name="quick_menu_style_title">🎨 স্টাইল: %1$s</string>
+    <string name="quick_menu_style_desc">ট্যাপ করে পরবর্তী স্টাইল নির্বাচন করুন</string>
+    <string name="quick_menu_continuous_title">∞ একটানা মোড (Continuous)</string>
+    <string name="quick_menu_continuous_desc">বিরতিহীনভাবে একের পর এক বাক্য যোগ</string>
+    <string name="settings_tap_mode_title">বাবল স্পর্শ মোড (Tap Mode)</string>
+    <string name="settings_tap_mode_desc">ট্যাপে শুরু/শেষ অথবা চেপে ধরে কথা বলা (Push to Talk)</string>
 </resources>

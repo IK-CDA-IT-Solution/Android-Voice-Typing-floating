@@ -69,8 +69,10 @@ class SpeechEngine(private val context: Context) {
     private var accumulatedText = StringBuilder()
     private var isContinuousSessionActive = false
     private var isManualStopPending = false
+    private var stopWatchdogRunnable: Runnable? = null
     private var sessionStartTimeMs = 0L
     private var activeLanguageCode: String = "bn-BD"
+    private var activeAutoPunctuation: Boolean = true
     private var activeOnFinalResult: ((rawText: String, lang: String, durationMs: Long) -> Unit)? = null
     private var activeOnErrorOccurred: ((errorMessage: String, errorCode: Int) -> Unit)? = null
 
@@ -160,6 +162,7 @@ class SpeechEngine(private val context: Context) {
         playTone: Boolean = true,
         enableHaptic: Boolean = true,
         continuousMode: Boolean = false,
+        autoPunctuation: Boolean = true,
         onPartialResult: ((String) -> Unit)? = null,
         onFinalResult: ((rawText: String, lang: String, durationMs: Long) -> Unit)? = null,
         onErrorOccurred: ((errorMessage: String, errorCode: Int) -> Unit)? = null
@@ -212,11 +215,13 @@ class SpeechEngine(private val context: Context) {
         hasRetriedBusy = false
         hasRetriedOnline = false
         hasRetriedOnDevice = false
+        stopWatchdogRunnable?.let { mainHandler.removeCallbacks(it); stopWatchdogRunnable = null }
         isContinuousSessionActive = continuousMode
         isManualStopPending = false
         accumulatedText.clear()
         sessionStartTimeMs = System.currentTimeMillis()
         activeLanguageCode = languageCode
+        activeAutoPunctuation = autoPunctuation
         activeOnFinalResult = onFinalResult
         activeOnErrorOccurred = onErrorOccurred
 
@@ -518,6 +523,9 @@ class SpeechEngine(private val context: Context) {
                             }
                             invalidatePendingStart()
                             cleanupRecognizer()
+                            stopWatchdogRunnable?.let { mainHandler.removeCallbacks(it); stopWatchdogRunnable = null }
+                            isContinuousSessionActive = false
+                            isManualStopPending = false
                             stateMachine.moveToError(errorMsg, error)
                             if (enableHaptic) triggerHapticDouble()
                             onErrorOccurred?.invoke(errorMsg, error)
@@ -530,7 +538,32 @@ class SpeechEngine(private val context: Context) {
                                 onlineNetworkCircuitBreaker.recordOnlineSuccess()
                             }
                             val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                            val text = matches?.firstOrNull()?.trim() ?: ""
+                            var text = matches?.firstOrNull()?.trim() ?: ""
+
+                            if (activeAutoPunctuation && text.isNotBlank()) {
+                                val cmdResult = VoiceCommandProcessor.process(text)
+                                if (cmdResult.isClearAllTriggered) {
+                                    accumulatedText.clear()
+                                    text = ""
+                                } else if (cmdResult.isDeleteLastWordTriggered) {
+                                    if (cmdResult.processedText.isBlank()) {
+                                        val currentStr = accumulatedText.toString().trim()
+                                        val lastSpace = currentStr.lastIndexOf(' ')
+                                        accumulatedText.clear()
+                                        if (lastSpace >= 0) {
+                                            accumulatedText.append(currentStr.substring(0, lastSpace).trim())
+                                        }
+                                        text = ""
+                                    } else {
+                                        text = cmdResult.processedText
+                                    }
+                                } else {
+                                    text = cmdResult.processedText
+                                }
+                                if (cmdResult.isCopyCommandTriggered) {
+                                    isManualStopPending = true
+                                }
+                            }
 
                             if (text.isNotBlank()) {
                                 if (accumulatedText.isNotEmpty()) {
@@ -561,19 +594,23 @@ class SpeechEngine(private val context: Context) {
                                 return
                             }
 
+                            stopWatchdogRunnable?.let { mainHandler.removeCallbacks(it); stopWatchdogRunnable = null }
                             val finalFullText = if (isContinuousSessionActive) {
                                 accumulatedText.toString().trim()
                             } else {
                                 text
                             }
                             val duration = System.currentTimeMillis() - if (isContinuousSessionActive) sessionStartTimeMs else startTimeMs
+                            val lang = if (isContinuousSessionActive) activeLanguageCode else languageCode
+                            isContinuousSessionActive = false
+                            isManualStopPending = false
 
                             if (finalFullText.isNotBlank()) {
                                 invalidatePendingStart()
                                 cleanupRecognizer()
                                 if (enableHaptic) triggerHapticSuccess()
                                 if (playTone) playBeep(ToneGenerator.TONE_PROP_ACK)
-                                onFinalResult?.invoke(finalFullText, languageCode, duration)
+                                onFinalResult?.invoke(finalFullText, lang, duration)
                             } else {
                                 val msg = context.getString(R.string.speech_err_no_match)
                                 invalidatePendingStart()
@@ -621,24 +658,45 @@ class SpeechEngine(private val context: Context) {
     fun stopSession() {
         mainHandler.post {
             mainHandler.removeCallbacks(processingTimeoutRunnable)
-            if (isContinuousSessionActive && accumulatedText.isNotBlank()) {
-                val finalFullText = accumulatedText.toString().trim()
-                val duration = System.currentTimeMillis() - sessionStartTimeMs
-                invalidatePendingStart()
-                cleanupRecognizer()
-                activeOnFinalResult?.invoke(finalFullText, activeLanguageCode, duration)
-                return@post
-            }
-
             if (isStartPending) {
                 invalidatePendingStart()
                 cleanupRecognizer()
-                stateMachine.resetToIdle()
+                stopWatchdogRunnable?.let { mainHandler.removeCallbacks(it); stopWatchdogRunnable = null }
+                val finalFullText = accumulatedText.toString().trim()
+                val duration = System.currentTimeMillis() - sessionStartTimeMs
+                val lang = activeLanguageCode
+                isContinuousSessionActive = false
+                isManualStopPending = false
+                if (finalFullText.isNotBlank()) {
+                    activeOnFinalResult?.invoke(finalFullText, lang, duration)
+                } else {
+                    stateMachine.resetToIdle()
+                }
                 return@post
             }
 
             if (isContinuousSessionActive) {
                 isManualStopPending = true
+                stopWatchdogRunnable?.let { mainHandler.removeCallbacks(it) }
+                val watchdog = Runnable {
+                    if (isContinuousSessionActive && stateMachine.state.value is BubbleState.Listening) {
+                        val finalFullText = accumulatedText.toString().trim()
+                        val duration = System.currentTimeMillis() - sessionStartTimeMs
+                        val lang = activeLanguageCode
+                        isContinuousSessionActive = false
+                        isManualStopPending = false
+                        stopWatchdogRunnable = null
+                        invalidatePendingStart()
+                        cleanupRecognizer()
+                        if (finalFullText.isNotBlank()) {
+                            activeOnFinalResult?.invoke(finalFullText, lang, duration)
+                        } else {
+                            stateMachine.resetToIdle()
+                        }
+                    }
+                }
+                stopWatchdogRunnable = watchdog
+                mainHandler.postDelayed(watchdog, 1500L)
             }
 
             try {
@@ -652,7 +710,9 @@ class SpeechEngine(private val context: Context) {
     fun cancelSession() {
         mainHandler.post {
             mainHandler.removeCallbacks(processingTimeoutRunnable)
+            stopWatchdogRunnable?.let { mainHandler.removeCallbacks(it); stopWatchdogRunnable = null }
             isContinuousSessionActive = false
+            isManualStopPending = false
             accumulatedText.clear()
             invalidatePendingStart()
             cleanupRecognizer()
@@ -663,7 +723,9 @@ class SpeechEngine(private val context: Context) {
     fun destroy() {
         mainHandler.post {
             mainHandler.removeCallbacks(processingTimeoutRunnable)
+            stopWatchdogRunnable?.let { mainHandler.removeCallbacks(it); stopWatchdogRunnable = null }
             isContinuousSessionActive = false
+            isManualStopPending = false
             accumulatedText.clear()
             invalidatePendingStart()
             cleanupRecognizer()

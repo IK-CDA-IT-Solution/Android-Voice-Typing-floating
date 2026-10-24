@@ -50,6 +50,17 @@ enum class PolishStyle(val key: String, val title: String, val description: Stri
     }
 }
 
+enum class TapMode(val key: String, val title: String, val description: String) {
+    TAP_TO_TOGGLE("tap_to_toggle", "ট্যাপে শুরু/শেষ (Tap to Toggle)", "একবার ট্যাপে রেকর্ডিং শুরু, আবার ট্যাপে শেষ। মেনু দেখতে চেপে ধরে রাখুন।"),
+    PUSH_TO_TALK("push_to_talk", "চেপে ধরে কথা (Push to Talk)", "বাবল চেপে ধরে কথা বলুন, আঙুল ছেড়ে দিলে শেষ। মেনু দেখতে ডাবল-ট্যাপ করুন।");
+
+    val displayName: String get() = title
+
+    companion object {
+        fun fromKey(key: String): TapMode = entries.firstOrNull { it.key == key } ?: TAP_TO_TOGGLE
+    }
+}
+
 class AppPreferences(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("voice_bubble_prefs", Context.MODE_PRIVATE)
 
@@ -128,6 +139,11 @@ class AppPreferences(context: Context) {
     private val _directInject = MutableStateFlow(prefs.getBoolean(KEY_DIRECT_INJECT, false))
     val directInject: StateFlow<Boolean> = _directInject.asStateFlow()
 
+    private val _tapMode = MutableStateFlow(
+        TapMode.fromKey(prefs.getString(KEY_TAP_MODE, TapMode.TAP_TO_TOGGLE.key) ?: TapMode.TAP_TO_TOGGLE.key)
+    )
+    val tapMode: StateFlow<TapMode> = _tapMode.asStateFlow()
+
     init {
         // Enforce 48dp minimum in storage
         if (prefs.getInt(KEY_BUBBLE_SIZE, 60) < 48) {
@@ -168,6 +184,11 @@ class AppPreferences(context: Context) {
     fun setDirectInject(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_DIRECT_INJECT, enabled).apply()
         _directInject.value = enabled
+    }
+
+    fun setTapMode(mode: TapMode) {
+        prefs.edit().putString(KEY_TAP_MODE, mode.key).apply()
+        _tapMode.value = mode
     }
 
     fun setBubbleSize(sizeDp: Int) {
@@ -280,6 +301,7 @@ class AppPreferences(context: Context) {
         private const val KEY_CUSTOM_POLISH_PROMPT = "key_custom_polish_prompt"
         private const val KEY_RECENT_LANGUAGES = "key_recent_languages"
         private const val KEY_DIRECT_INJECT = "key_direct_inject"
+        private const val KEY_TAP_MODE = "key_tap_mode"
 
         @Volatile
         private var INSTANCE: AppPreferences? = null

@@ -46,6 +46,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.EditText
 import android.view.inputmethod.InputMethodManager
@@ -137,10 +138,19 @@ class FloatingBubbleService : Service() {
     private var latestTranscript: String? = null
     private var quickMenuCard: LinearLayout? = null
     private var geminiStatusBadge: TextView? = null
+    private var quickMenuLanguageTitle: TextView? = null
+    private var quickMenuStyleTitle: TextView? = null
+    private var quickMenuContinuousBadge: TextView? = null
     private var isQuickMenuOpen = false
     private var longPressRunnable: Runnable? = null
     private var isLongPressTriggered = false
     private var touchStartTime = 0L
+    private var lastTapUpTime = 0L
+    private var isPushToTalkActive = false
+    private var isMiniMode = false
+    private var preMenuWindowX: Int? = null
+    private var preMenuWindowY: Int? = null
+    private var savedPreKeyboardY: Int? = null
     private var hideBadgeJob: Job? = null
     private var dockingAnimator: ValueAnimator? = null
 
@@ -522,14 +532,78 @@ class FloatingBubbleService : Service() {
         }
         floatingRootView?.addView(column)
 
-        floatingRootView?.setOnClickListener {
+        floatingRootView?.setOnTouchListener { _, event ->
             if (isQuickMenuOpen) {
-                hideQuickMenu()
+                if (event.action == MotionEvent.ACTION_OUTSIDE) {
+                    hideQuickMenu()
+                    return@setOnTouchListener true
+                }
+                if (event.action == MotionEvent.ACTION_DOWN) {
+                    val menuLoc = IntArray(2)
+                    quickMenuCard?.getLocationOnScreen(menuLoc)
+                    val bubbleLoc = IntArray(2)
+                    bubbleContainer?.getLocationOnScreen(bubbleLoc)
+
+                    val rx = event.rawX.toInt()
+                    val ry = event.rawY.toInt()
+
+                    val inMenu = rx >= menuLoc[0] && rx <= menuLoc[0] + (quickMenuCard?.width ?: 0) &&
+                            ry >= menuLoc[1] && ry <= menuLoc[1] + (quickMenuCard?.height ?: 0)
+                    val inBubble = rx >= bubbleLoc[0] && rx <= bubbleLoc[0] + (bubbleContainer?.width ?: 0) &&
+                            ry >= bubbleLoc[1] && ry <= bubbleLoc[1] + (bubbleContainer?.height ?: 0)
+
+                    if (!inMenu && !inBubble) {
+                        hideQuickMenu()
+                        return@setOnTouchListener true
+                    }
+                }
             }
+            false
         }
 
+        setupKeyboardAvoidance()
         setupTouchListener()
         setupRemoveTarget()
+    }
+
+    private fun setupKeyboardAvoidance() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            floatingRootView?.setOnApplyWindowInsetsListener { _, insets ->
+                val imeInsets = insets.getInsets(android.view.WindowInsets.Type.ime())
+                handleImeHeightChanged(imeInsets.bottom)
+                insets
+            }
+        }
+    }
+
+    private fun handleImeHeightChanged(imeHeight: Int) {
+        if (isDragging || isQuickMenuOpen) return
+        val bubbleSizePx = dpToPx(appPreferences.bubbleSizeDp.value)
+        if (imeHeight > 0) {
+            val bubbleBottom = windowParams.y + bubbleSizePx
+            val keyboardTop = screenHeight - imeHeight
+            if (bubbleBottom > keyboardTop - dpToPx(16)) {
+                if (savedPreKeyboardY == null) {
+                    savedPreKeyboardY = windowParams.y
+                }
+                windowParams.y = maxOf(dpToPx(24), keyboardTop - bubbleSizePx - dpToPx(16))
+                try {
+                    windowManager?.updateViewLayout(floatingRootView, windowParams)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error updating window for keyboard", e)
+                }
+            }
+        } else {
+            savedPreKeyboardY?.let { prevY ->
+                windowParams.y = prevY
+                savedPreKeyboardY = null
+                try {
+                    windowManager?.updateViewLayout(floatingRootView, windowParams)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error restoring window after keyboard", e)
+                }
+            }
+        }
     }
 
     private fun setupRemoveTarget() {
@@ -605,6 +679,7 @@ class FloatingBubbleService : Service() {
         bubbleContainer?.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    restoreFromMini()
                     cancelAutoDismiss()
                     dockingAnimator?.cancel()
                     initialX = windowParams.x
@@ -616,15 +691,23 @@ class FloatingBubbleService : Service() {
                     isOverRemoveTarget = false
                     isLongPressTriggered = false
 
-                    longPressRunnable?.let { mainHandler.removeCallbacks(it) }
-                    longPressRunnable = Runnable {
-                        if (!isDragging && speechEngine.speechState.value !is BubbleState.Listening && speechEngine.speechState.value !is BubbleState.Processing) {
-                            isLongPressTriggered = true
-                            triggerHapticClick()
-                            toggleQuickMenu()
+                    val isPushToTalk = appPreferences.tapMode.value == com.nirzor.voicebubble.data.TapMode.PUSH_TO_TALK
+                    if (isPushToTalk) {
+                        if (speechEngine.speechState.value is BubbleState.Idle) {
+                            isPushToTalkActive = true
+                            startListeningSession()
                         }
+                    } else {
+                        longPressRunnable?.let { mainHandler.removeCallbacks(it) }
+                        longPressRunnable = Runnable {
+                            if (!isDragging && speechEngine.speechState.value !is BubbleState.Listening && speechEngine.speechState.value !is BubbleState.Processing) {
+                                isLongPressTriggered = true
+                                triggerHapticClick()
+                                toggleQuickMenu()
+                            }
+                        }
+                        mainHandler.postDelayed(longPressRunnable!!, 450L)
                     }
-                    mainHandler.postDelayed(longPressRunnable!!, 450L)
                     true
                 }
 
@@ -635,6 +718,10 @@ class FloatingBubbleService : Service() {
                     if (!isDragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
                         longPressRunnable?.let { mainHandler.removeCallbacks(it) }
                         isDragging = true
+                        if (isPushToTalkActive) {
+                            isPushToTalkActive = false
+                            speechEngine.cancelSession()
+                        }
                         if (isQuickMenuOpen) {
                             hideQuickMenu()
                         }
@@ -676,8 +763,13 @@ class FloatingBubbleService : Service() {
                     if (isLongPressTriggered) {
                         // Handled by long-press gesture
                     } else if (isDragging) {
+                        if (isPushToTalkActive) {
+                            isPushToTalkActive = false
+                            speechEngine.cancelSession()
+                        }
                         if (isOverRemoveTarget) {
                             // Phase E.1: Drag to remove target stops service
+                            speechEngine.cancelSession()
                             stopSelf()
                             return@setOnTouchListener true
                         }
@@ -689,11 +781,53 @@ class FloatingBubbleService : Service() {
                             appPreferences.setBubblePosition(windowParams.x, windowParams.y)
                         }
                     } else {
-                        // Single tap detected!
-                        if (isQuickMenuOpen) {
-                            hideQuickMenu()
+                        val now = System.currentTimeMillis()
+                        val isPushToTalk = appPreferences.tapMode.value == com.nirzor.voicebubble.data.TapMode.PUSH_TO_TALK
+                        if (isPushToTalk) {
+                            if (isPushToTalkActive) {
+                                isPushToTalkActive = false
+                                if (now - touchStartTime >= 250L) {
+                                    // Held to speak: normal stop
+                                    if (speechEngine.speechState.value is BubbleState.Listening) {
+                                        speechEngine.stopSession()
+                                    }
+                                } else {
+                                    // Short tap (< 250ms)
+                                    if (now - lastTapUpTime < 320L) {
+                                        // Double tap: cancel and open quick menu
+                                        lastTapUpTime = 0L
+                                        speechEngine.cancelSession()
+                                        toggleQuickMenu()
+                                    } else {
+                                        lastTapUpTime = now
+                                        if (speechEngine.speechState.value is BubbleState.Listening) {
+                                            speechEngine.stopSession()
+                                        }
+                                    }
+                                }
+                            }
                         } else {
-                            handleBubbleTap()
+                            if (isQuickMenuOpen) {
+                                hideQuickMenu()
+                            } else {
+                                val state = speechEngine.speechState.value
+                                if (state is BubbleState.Listening) {
+                                    if (now - lastTapUpTime < 300L) {
+                                        // Double tap: cancel and switch language
+                                        lastTapUpTime = 0L
+                                        speechEngine.cancelSession()
+                                        toggleLanguageBetweenRecent()
+                                    } else {
+                                        // Normal stop while speaking
+                                        lastTapUpTime = 0L
+                                        speechEngine.stopSession()
+                                    }
+                                } else {
+                                    // Instant start (0ms latency)!
+                                    lastTapUpTime = now
+                                    handleBubbleTap()
+                                }
+                            }
                         }
                     }
                     isDragging = false
@@ -705,6 +839,10 @@ class FloatingBubbleService : Service() {
                 MotionEvent.ACTION_CANCEL -> {
                     longPressRunnable?.let { mainHandler.removeCallbacks(it) }
                     showRemoveTarget(false)
+                    if (isPushToTalkActive) {
+                        isPushToTalkActive = false
+                        speechEngine.cancelSession()
+                    }
                     isDragging = false
                     isLongPressTriggered = false
                     scheduleAutoDismiss()
@@ -713,6 +851,18 @@ class FloatingBubbleService : Service() {
                 else -> false
             }
         }
+    }
+
+    private fun toggleLanguageBetweenRecent() {
+        val current = appPreferences.selectedLanguage.value
+        val recent = appPreferences.recentLanguages.value
+        val other = recent.firstOrNull { it != current && it != "default" }
+            ?: if (current == "bn-BD") "en-US" else "bn-BD"
+        appPreferences.setSelectedLanguage(other)
+        val langObj = SupportedLanguages.getLanguageByCode(other)
+        showTemporaryBadge("ভাষা: ${langObj.flag} ${langObj.nativeName}", isAi = false)
+        triggerHapticClick()
+        updateQuickMenuLanguageLabel()
     }
 
     private fun handleBubbleTap() {
@@ -777,6 +927,7 @@ class FloatingBubbleService : Service() {
     }
 
     private fun startListeningSession() {
+        restoreFromMini()
         cancelAutoDismiss()
         hideResultActionPill()
         copiedBadge?.visibility = View.GONE
@@ -790,6 +941,7 @@ class FloatingBubbleService : Service() {
             playTone = appPreferences.soundFeedback.value,
             enableHaptic = appPreferences.hapticFeedback.value,
             continuousMode = appPreferences.continuousMode.value,
+            autoPunctuation = appPreferences.autoPunctuation.value,
             onPartialResult = { partial ->
                 latestPartialTranscript = partial
                 mainHandler.post {
@@ -885,6 +1037,11 @@ class FloatingBubbleService : Service() {
                             Log.e(TAG, "Error updating history with polished text", e)
                         }
                     }
+                } else {
+                    val reason = GeminiApiClient.lastFailureReason ?: "টাইমআউট"
+                    mainHandler.post {
+                        showTemporaryBadge("কপি ✓ (পলিশ: $reason)", isAi = false, isWarning = true)
+                    }
                 }
             }
         }
@@ -948,6 +1105,9 @@ class FloatingBubbleService : Service() {
                                 updateResultActionPillPolished(newPolished)
                                 deliverText(newPolished, isPolished = true)
                                 showTemporaryBadge("✨ পলিশ ✓", isAi = true)
+                            } else {
+                                val reason = GeminiApiClient.lastFailureReason ?: "ব্যর্থ"
+                                showTemporaryBadge("পলিশ ব্যর্থ: $reason", isAi = false, isWarning = true)
                             }
                             resetActionPillTimeout(2000L)
                         }
@@ -1173,6 +1333,25 @@ class FloatingBubbleService : Service() {
                 }
             }
         }
+        serviceScope.launch {
+            appPreferences.selectedLanguage.collect {
+                mainHandler.post { updateQuickMenuLanguageLabel() }
+            }
+        }
+        serviceScope.launch {
+            appPreferences.polishStyle.collect {
+                mainHandler.post { updateQuickMenuStyleLabel() }
+            }
+        }
+        serviceScope.launch {
+            appPreferences.continuousMode.collect { isEnabled ->
+                mainHandler.post {
+                    quickMenuContinuousBadge?.let {
+                        updateContinuousBadge(it, isEnabled)
+                    }
+                }
+            }
+        }
     }
 
     private fun initQuickMenuCard(): LinearLayout {
@@ -1189,7 +1368,7 @@ class FloatingBubbleService : Service() {
             elevation = dpToPx(24).toFloat()
             visibility = View.GONE
 
-            // Header Layout
+            // Header Layout (Fixed at top)
             val headerLayout = LinearLayout(this@FloatingBubbleService).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -1216,28 +1395,177 @@ class FloatingBubbleService : Service() {
             headerLayout.addView(closeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(headerLayout)
 
-            // Divider
+            // Divider below header
             addView(createDivider())
 
-            val copyLatestRow = quickMenuRow(
-                title = "📋 সর্বশেষ লেখা কপি করুন",
-                subtitle = "শুধু আপনার ট্যাপে ক্লিপবোর্ডে কপি হবে"
-            ) {
-                copyLatestTranscript()
+            // Scrollable Content Layout
+            val scrollContent = LinearLayout(this@FloatingBubbleService).apply {
+                orientation = LinearLayout.VERTICAL
             }
-            addView(copyLatestRow)
-            addView(createDivider())
 
-            val shareLatestRow = quickMenuRow(
-                title = "↗ লেখা পাঠান / শেয়ার করুন",
-                subtitle = "Clipboard অ্যাপসহ একটি গন্তব্য বেছে নিন"
-            ) {
-                shareLatestTranscript()
+            // 1. Language Row
+            val languageRow = LinearLayout(this@FloatingBubbleService).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                val pV = dpToPx(8)
+                val pH = dpToPx(4)
+                setPadding(pH, pV, pH, pV)
+                isClickable = true
+                isFocusable = true
+
+                val rowTextLayout = LinearLayout(this@FloatingBubbleService).apply {
+                    orientation = LinearLayout.VERTICAL
+                    val textTitle = TextView(this@FloatingBubbleService).apply {
+                        text = "🌐 ভাষা (Language)"
+                        setTextColor(Color.parseColor("#F8FAFC"))
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                        setTypeface(null, android.graphics.Typeface.BOLD)
+                    }
+                    val textSub = TextView(this@FloatingBubbleService).apply {
+                        text = "বাংলা ↔ ইংরেজি দ্রুত বদল"
+                        setTextColor(Color.parseColor("#94A3B8"))
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+                    }
+                    addView(textTitle)
+                    addView(textSub)
+                }
+
+                quickMenuLanguageTitle = TextView(this@FloatingBubbleService).apply {
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+                    setTypeface(null, android.graphics.Typeface.BOLD)
+                    val bPadH = dpToPx(8)
+                    val bPadV = dpToPx(3)
+                    setPadding(bPadH, bPadV, bPadH, bPadV)
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.RECTANGLE
+                        cornerRadius = dpToPx(10).toFloat()
+                        setColor(Color.parseColor("#1E293B"))
+                        setStroke(dpToPx(1), Color.parseColor("#38BDF8"))
+                    }
+                    setTextColor(Color.parseColor("#38BDF8"))
+                }
+                updateQuickMenuLanguageLabel()
+
+                addView(rowTextLayout, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(quickMenuLanguageTitle, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+                setOnClickListener {
+                    toggleLanguageBetweenRecent()
+                }
             }
-            addView(shareLatestRow)
-            addView(createDivider())
+            scrollContent.addView(languageRow)
+            scrollContent.addView(createDivider())
 
-            // Option 1: Gemini AI Paraphrasing Toggle
+            // 2. Polish Style Row
+            val styleRow = LinearLayout(this@FloatingBubbleService).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                val pV = dpToPx(8)
+                val pH = dpToPx(4)
+                setPadding(pH, pV, pH, pV)
+                isClickable = true
+                isFocusable = true
+
+                val rowTextLayout = LinearLayout(this@FloatingBubbleService).apply {
+                    orientation = LinearLayout.VERTICAL
+                    val textTitle = TextView(this@FloatingBubbleService).apply {
+                        text = "🎨 পলিশ স্টাইল"
+                        setTextColor(Color.parseColor("#F8FAFC"))
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                        setTypeface(null, android.graphics.Typeface.BOLD)
+                    }
+                    val textSub = TextView(this@FloatingBubbleService).apply {
+                        text = "ট্যাপে পরবর্তী স্টাইলে পরিবর্তন"
+                        setTextColor(Color.parseColor("#94A3B8"))
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+                    }
+                    addView(textTitle)
+                    addView(textSub)
+                }
+
+                quickMenuStyleTitle = TextView(this@FloatingBubbleService).apply {
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+                    setTypeface(null, android.graphics.Typeface.BOLD)
+                    val bPadH = dpToPx(8)
+                    val bPadV = dpToPx(3)
+                    setPadding(bPadH, bPadV, bPadH, bPadV)
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.RECTANGLE
+                        cornerRadius = dpToPx(10).toFloat()
+                        setColor(Color.parseColor("#1E293B"))
+                        setStroke(dpToPx(1), Color.parseColor("#A855F7"))
+                    }
+                    setTextColor(Color.parseColor("#C084FC"))
+                }
+                updateQuickMenuStyleLabel()
+
+                addView(rowTextLayout, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(quickMenuStyleTitle, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+                setOnClickListener {
+                    val styles = com.nirzor.voicebubble.data.PolishStyle.entries
+                    val currentIndex = styles.indexOf(appPreferences.polishStyle.value)
+                    val nextStyle = styles[(currentIndex + 1) % styles.size]
+                    appPreferences.setPolishStyle(nextStyle)
+                    updateQuickMenuStyleLabel()
+                    showTemporaryBadge("স্টাইল: ${nextStyle.title}", isAi = true)
+                    triggerHapticClick()
+                }
+            }
+            scrollContent.addView(styleRow)
+            scrollContent.addView(createDivider())
+
+            // 3. Continuous Dictation Row
+            val continuousRow = LinearLayout(this@FloatingBubbleService).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                val pV = dpToPx(8)
+                val pH = dpToPx(4)
+                setPadding(pH, pV, pH, pV)
+                isClickable = true
+                isFocusable = true
+
+                val rowTextLayout = LinearLayout(this@FloatingBubbleService).apply {
+                    orientation = LinearLayout.VERTICAL
+                    val textTitle = TextView(this@FloatingBubbleService).apply {
+                        text = "∞ একটানা ডিক্টেশন"
+                        setTextColor(Color.parseColor("#F8FAFC"))
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                        setTypeface(null, android.graphics.Typeface.BOLD)
+                    }
+                    val textSub = TextView(this@FloatingBubbleService).apply {
+                        text = "থামার পরেও রেকর্ডিং চালু থাকবে"
+                        setTextColor(Color.parseColor("#94A3B8"))
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+                    }
+                    addView(textTitle)
+                    addView(textSub)
+                }
+
+                quickMenuContinuousBadge = TextView(this@FloatingBubbleService).apply {
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+                    setTypeface(null, android.graphics.Typeface.BOLD)
+                    val bPadH = dpToPx(8)
+                    val bPadV = dpToPx(3)
+                    setPadding(bPadH, bPadV, bPadH, bPadV)
+                    updateContinuousBadge(this, appPreferences.continuousMode.value)
+                }
+
+                addView(rowTextLayout, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(quickMenuContinuousBadge, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+                setOnClickListener {
+                    val newState = !appPreferences.continuousMode.value
+                    appPreferences.setContinuousMode(newState)
+                    quickMenuContinuousBadge?.let { badge -> updateContinuousBadge(badge, newState) }
+                    showTemporaryBadge(if (newState) "একটানা ডিক্টেশন চালু" else "একটানা ডিক্টেশন বন্ধ", isAi = false)
+                    triggerHapticClick()
+                }
+            }
+            scrollContent.addView(continuousRow)
+            scrollContent.addView(createDivider())
+
+            // 4. Gemini AI Paraphrasing Toggle
             val geminiRow = LinearLayout(this@FloatingBubbleService).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -1283,10 +1611,30 @@ class FloatingBubbleService : Service() {
                     triggerHapticClick()
                 }
             }
-            addView(geminiRow)
-            addView(createDivider())
+            scrollContent.addView(geminiRow)
+            scrollContent.addView(createDivider())
 
-            // Option 2: History Log
+            // 5. Copy Latest
+            val copyLatestRow = quickMenuRow(
+                title = "📋 সর্বশেষ লেখা কপি করুন",
+                subtitle = "শুধু আপনার ট্যাপে ক্লিপবোর্ডে কপি হবে"
+            ) {
+                copyLatestTranscript()
+            }
+            scrollContent.addView(copyLatestRow)
+            scrollContent.addView(createDivider())
+
+            // 6. Share Latest
+            val shareLatestRow = quickMenuRow(
+                title = "↗ লেখা পাঠান / শেয়ার করুন",
+                subtitle = "অন্য অ্যাপে টেক্সট শেয়ার করুন"
+            ) {
+                shareLatestTranscript()
+            }
+            scrollContent.addView(shareLatestRow)
+            scrollContent.addView(createDivider())
+
+            // 7. History Log
             val historyRow = LinearLayout(this@FloatingBubbleService).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -1333,7 +1681,20 @@ class FloatingBubbleService : Service() {
                     startActivity(historyIntent)
                 }
             }
-            addView(historyRow)
+            scrollContent.addView(historyRow)
+
+            val scrollView = object : ScrollView(this@FloatingBubbleService) {
+                override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                    val maxHeight = dpToPx(340)
+                    val newHeightSpec = MeasureSpec.makeMeasureSpec(maxHeight, MeasureSpec.AT_MOST)
+                    super.onMeasure(widthMeasureSpec, newHeightSpec)
+                }
+            }.apply {
+                isVerticalScrollBarEnabled = false
+                addView(scrollContent)
+            }
+
+            addView(scrollView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         }
         return card
     }
@@ -1402,22 +1763,73 @@ class FloatingBubbleService : Service() {
         badge.setTextColor(if (isEnabled) Color.parseColor("#34D399") else Color.parseColor("#94A3B8"))
     }
 
+    private fun updateContinuousBadge(badge: TextView, isEnabled: Boolean) {
+        val bg = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dpToPx(10).toFloat()
+            if (isEnabled) {
+                setColor(Color.parseColor("#065F46"))
+                setStroke(dpToPx(1), Color.parseColor("#34D399"))
+            } else {
+                setColor(Color.parseColor("#334155"))
+                setStroke(dpToPx(1), Color.parseColor("#64748B"))
+            }
+        }
+        badge.background = bg
+        badge.text = if (isEnabled) "চালু (ON)" else "বন্ধ (OFF)"
+        badge.setTextColor(if (isEnabled) Color.parseColor("#34D399") else Color.parseColor("#94A3B8"))
+    }
+
+    private fun updateQuickMenuLanguageLabel() {
+        val current = appPreferences.selectedLanguage.value
+        val langObj = SupportedLanguages.getLanguageByCode(current)
+        quickMenuLanguageTitle?.text = "${langObj.flag} ${langObj.nativeName}"
+    }
+
+    private fun updateQuickMenuStyleLabel() {
+        val currentStyle = appPreferences.polishStyle.value
+        quickMenuStyleTitle?.text = currentStyle.title
+    }
+
     private fun showQuickMenu() {
         if (speechEngine.speechState.value is BubbleState.Listening || speechEngine.speechState.value is BubbleState.Processing) return
         isQuickMenuOpen = true
+        restoreFromMini()
+
         geminiStatusBadge?.let {
             updateGeminiBadge(it, appPreferences.aiPolishEnabled.value)
         }
+        quickMenuContinuousBadge?.let {
+            updateContinuousBadge(it, appPreferences.continuousMode.value)
+        }
+        updateQuickMenuLanguageLabel()
+        updateQuickMenuStyleLabel()
 
         updateScreenDimensions()
+        val bubbleSizePx = dpToPx(appPreferences.bubbleSizeDp.value)
         val menuWidthPx = dpToPx(240)
-        if (windowParams.x + menuWidthPx > screenWidth) {
-            windowParams.x = maxOf(dpToPx(8), screenWidth - menuWidthPx - dpToPx(8))
-            try {
-                windowManager?.updateViewLayout(floatingRootView, windowParams)
-            } catch (e: Exception) {
-                Log.e(TAG, "Update layout on quick menu show", e)
-            }
+
+        // Record pre-menu positions
+        preMenuWindowX = windowParams.x
+        preMenuWindowY = windowParams.y
+
+        // Bubble shift compensation (P1-9.2)
+        val previousCenterX = windowParams.x + bubbleSizePx / 2
+        var targetX = previousCenterX - menuWidthPx / 2
+        targetX = targetX.coerceIn(dpToPx(8), maxOf(dpToPx(8), screenWidth - menuWidthPx - dpToPx(8)))
+        windowParams.x = targetX
+
+        // Y-overflow compensation (P1-9.1)
+        val estimatedMenuHeight = dpToPx(340)
+        if (windowParams.y + bubbleSizePx + estimatedMenuHeight > screenHeight - dpToPx(16)) {
+            windowParams.y = maxOf(dpToPx(24), screenHeight - estimatedMenuHeight - bubbleSizePx - dpToPx(16))
+        }
+
+        windowParams.flags = windowParams.flags or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+        try {
+            windowManager?.updateViewLayout(floatingRootView, windowParams)
+        } catch (e: Exception) {
+            Log.e(TAG, "Update layout on quick menu show", e)
         }
 
         quickMenuCard?.visibility = View.VISIBLE
@@ -1440,6 +1852,21 @@ class FloatingBubbleService : Service() {
                 override fun onAnimationStart(animation: Animation?) {}
                 override fun onAnimationEnd(animation: Animation?) {
                     quickMenuCard?.visibility = View.GONE
+                    val bubbleSizePx = dpToPx(appPreferences.bubbleSizeDp.value)
+                    preMenuWindowX?.let { prevX ->
+                        windowParams.x = prevX.coerceIn(dpToPx(8), maxOf(dpToPx(8), screenWidth - bubbleSizePx - dpToPx(8)))
+                        preMenuWindowX = null
+                    }
+                    preMenuWindowY?.let { prevY ->
+                        windowParams.y = prevY.coerceIn(dpToPx(24), maxOf(dpToPx(24), screenHeight - bubbleSizePx - dpToPx(24)))
+                        preMenuWindowY = null
+                    }
+                    windowParams.flags = windowParams.flags and WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH.inv()
+                    try {
+                        windowManager?.updateViewLayout(floatingRootView, windowParams)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Update layout on quick menu hide", e)
+                    }
                 }
                 override fun onAnimationRepeat(animation: Animation?) {}
             })
@@ -1493,13 +1920,18 @@ class FloatingBubbleService : Service() {
         }
     }
 
-    private fun showTemporaryBadge(message: String, isAi: Boolean) {
+    private fun showTemporaryBadge(message: String, isAi: Boolean, isWarning: Boolean = false) {
         hideBadgeJob?.cancel()
         copiedBadgeText?.text = message
+        val bgColor = when {
+            isWarning -> Color.parseColor("#E6D97706") // Amber / orange warning
+            isAi -> Color.parseColor("#E67C3AED")      // Purple
+            else -> Color.parseColor("#E6059669")      // Emerald green
+        }
         val bgDrawable = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = dpToPx(14).toFloat()
-            setColor(if (isAi) Color.parseColor("#E67C3AED") else Color.parseColor("#E6059669"))
+            setColor(bgColor)
         }
         copiedBadge?.background = bgDrawable
         copiedBadge?.visibility = View.VISIBLE
@@ -1546,24 +1978,43 @@ class FloatingBubbleService : Service() {
         }
     }
 
+    private fun fadeToMini() {
+        if (isMiniMode || isQuickMenuOpen) return
+        bubbleCircle?.animate()?.scaleX(0.6f)?.scaleY(0.6f)?.alpha(0.4f)?.setDuration(300)?.start()
+        isMiniMode = true
+    }
+
+    private fun restoreFromMini() {
+        if (!isMiniMode) return
+        bubbleCircle?.animate()?.scaleX(1f)?.scaleY(1f)?.alpha(appPreferences.bubbleOpacity.value)?.setDuration(200)?.start()
+        isMiniMode = false
+    }
+
     private fun scheduleAutoDismiss() {
         cancelAutoDismiss()
-        if (!shouldAutoDismissBubble(
-                keepAlwaysOn = appPreferences.keepBubbleAlwaysOn.value,
-                state = speechEngine.speechState.value,
-                retainedPartialDraft = latestPartialTranscript
-            )
-        ) return
+        val keepAlwaysOn = appPreferences.keepBubbleAlwaysOn.value
+        val shouldDismiss = shouldAutoDismissBubble(
+            keepAlwaysOn = keepAlwaysOn,
+            state = speechEngine.speechState.value,
+            retainedPartialDraft = latestPartialTranscript
+        )
+
         autoDismissJob = serviceScope.launch {
-            delay(15_000L) // 15-second timeout for dismissible idle/empty-error states
-            if (shouldAutoDismissBubble(
-                    keepAlwaysOn = appPreferences.keepBubbleAlwaysOn.value,
-                    state = speechEngine.speechState.value,
-                    retainedPartialDraft = latestPartialTranscript
-                )
-            ) {
-                Log.d(TAG, "Auto-dismissing bubble after 15s in a dismissible state")
-                stopSelf()
+            delay(5_000L) // After 5s idle in non-active state, fade to mini
+            if (!isMiniMode && speechEngine.speechState.value is BubbleState.Idle && !isQuickMenuOpen) {
+                mainHandler.post { fadeToMini() }
+            }
+            if (shouldDismiss) {
+                delay(10_000L) // Total 15s timeout
+                if (shouldAutoDismissBubble(
+                        keepAlwaysOn = appPreferences.keepBubbleAlwaysOn.value,
+                        state = speechEngine.speechState.value,
+                        retainedPartialDraft = latestPartialTranscript
+                    )
+                ) {
+                    Log.d(TAG, "Auto-dismissing bubble after 15s in a dismissible state")
+                    stopSelf()
+                }
             }
         }
     }

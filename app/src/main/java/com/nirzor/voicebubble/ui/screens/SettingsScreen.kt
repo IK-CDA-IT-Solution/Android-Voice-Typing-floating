@@ -54,6 +54,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -94,6 +95,7 @@ import com.nirzor.voicebubble.data.BubbleThemes
 import com.nirzor.voicebubble.data.PolishStyle
 import com.nirzor.voicebubble.data.SecureKeyManager
 import com.nirzor.voicebubble.data.SupportedLanguages
+import com.nirzor.voicebubble.data.TapMode
 import com.nirzor.voicebubble.service.GeminiApiClient
 import com.nirzor.voicebubble.service.KeyTestState
 import com.nirzor.voicebubble.ui.components.LanguageSelectorDialog
@@ -132,6 +134,7 @@ fun SettingsScreen(
     val continuousMode by prefs.continuousMode.collectAsState()
     val autoPunctuation by prefs.autoPunctuation.collectAsState()
     val customPolishPrompt by prefs.customPolishPrompt.collectAsState()
+    val tapMode by prefs.tapMode.collectAsState()
 
     val currentTheme = remember(bubbleColorTheme) { BubbleThemes.getThemeById(bubbleColorTheme) }
     val currentLang = remember(selectedLangCode) { SupportedLanguages.getLanguageByCode(selectedLangCode) }
@@ -561,6 +564,30 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "নিরাপত্তা টিপস: পেস্ট করার পর আপনার ক্লিপবোর্ড থেকে কী মুছে ফেলুন।",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                clipboard?.clearPrimaryClip()
+                            } else {
+                                clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("", ""))
+                            }
+                            Toast.makeText(context, "ক্লিপবোর্ড পরিষ্কার করা হয়েছে", Toast.LENGTH_SHORT).show()
+                        }) {
+                            Text("ক্লিপবোর্ড মুছুন", fontSize = 11.sp)
+                        }
+                    }
                 }
 
                 Row(
@@ -775,6 +802,37 @@ fun SettingsScreen(
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            // Tap Mode Selector (P1-7)
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Text(
+                    text = stringResource(R.string.settings_tap_mode_title),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = stringResource(R.string.settings_tap_mode_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TapMode.entries.forEach { mode ->
+                        val isSelected = tapMode == mode
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { prefs.setTapMode(mode) },
+                            label = { Text(mode.title, fontSize = 12.sp) },
+                            modifier = Modifier.weight(1f)
+                        )
                     }
                 }
             }

@@ -29,9 +29,9 @@ interface VoiceHistoryDao {
     @Query("""
         SELECT id, SUBSTR(text, 1, 200) AS previewText, rawText, polishedText, language, createdAt, isFavorite, wordCount, charCount 
         FROM voice_history 
-        WHERE text LIKE '%' || :query || '%' 
-           OR rawText LIKE '%' || :query || '%' 
-           OR (polishedText IS NOT NULL AND polishedText LIKE '%' || :query || '%')
+        WHERE text LIKE '%' || :query || '%' ESCAPE '\'
+           OR rawText LIKE '%' || :query || '%' ESCAPE '\'
+           OR (polishedText IS NOT NULL AND polishedText LIKE '%' || :query || '%' ESCAPE '\')
         ORDER BY createdAt DESC
     """)
     fun searchHistoryPreviews(query: String): Flow<List<VoiceHistoryPreviewDto>>
@@ -39,17 +39,26 @@ interface VoiceHistoryDao {
     @Query("SELECT * FROM voice_history WHERE id = :id")
     suspend fun getById(id: Long): VoiceHistoryEntity?
 
+    @Query("SELECT * FROM voice_history ORDER BY createdAt DESC")
+    suspend fun getAllEntriesSync(): List<VoiceHistoryEntity>
+
     @Query("SELECT * FROM voice_history ORDER BY createdAt DESC LIMIT 5")
     fun getRecentHistory(): Flow<List<VoiceHistoryEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(item: VoiceHistoryEntity): Long
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAllIgnoreConflicts(items: List<VoiceHistoryEntity>): List<Long>
+
     @Update
     suspend fun update(item: VoiceHistoryEntity)
 
     @Query("DELETE FROM voice_history WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM voice_history WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
 
     @Query("DELETE FROM voice_history")
     suspend fun clearAll()

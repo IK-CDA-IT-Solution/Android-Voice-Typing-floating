@@ -247,6 +247,9 @@ fun HistoryScreen(
                                     copyTextToClipboard(context, item.polishedText ?: item.rawText)
                                     copiedId = item.id
                                 },
+                                onShare = {
+                                    shareText(context, item.polishedText ?: item.rawText)
+                                },
                                 onCardClick = { selectedDetailId = item.id },
                                 onToggleFavorite = {
                                     scope.launch { repo.toggleFavorite(item.id, !item.isFavorite) }
@@ -276,6 +279,9 @@ fun HistoryScreen(
                                     onCopy = {
                                         copyTextToClipboard(context, item.polishedText ?: item.rawText)
                                         copiedId = item.id
+                                    },
+                                    onShare = {
+                                        shareText(context, item.polishedText ?: item.rawText)
                                     },
                                     onCardClick = { selectedDetailId = item.id },
                                     onToggleFavorite = {
@@ -343,6 +349,15 @@ private fun copyTextToClipboard(context: Context, text: String) {
     Toast.makeText(context, R.string.copied_toast, Toast.LENGTH_SHORT).show()
 }
 
+private fun shareText(context: Context, text: String) {
+    if (text.isBlank()) return
+    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    context.startActivity(Intent.createChooser(sendIntent, "Share Transcription").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+}
+
 private fun deleteWithUndo(
     context: Context,
     repo: com.nirzor.voicebubble.data.VoiceHistoryRepository,
@@ -371,6 +386,7 @@ private fun HistoryPreviewCard(
     item: VoiceHistoryPreviewDto,
     isJustCopied: Boolean,
     onCopy: () -> Unit,
+    onShare: () -> Unit,
     onCardClick: () -> Unit,
     onToggleFavorite: () -> Unit,
     onDelete: () -> Unit
@@ -410,6 +426,14 @@ private fun HistoryPreviewCard(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onShare, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Share",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                     IconButton(onClick = onToggleFavorite, modifier = Modifier.size(32.dp)) {
                         Icon(
                             imageVector = if (item.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
