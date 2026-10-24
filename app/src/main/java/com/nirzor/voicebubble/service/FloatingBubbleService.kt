@@ -58,6 +58,7 @@ import com.nirzor.voicebubble.VoiceBubbleApp
 import com.nirzor.voicebubble.data.AppPreferences
 import com.nirzor.voicebubble.data.BubbleTheme
 import com.nirzor.voicebubble.data.BubbleThemes
+import com.nirzor.voicebubble.data.SupportedLanguages
 import com.nirzor.voicebubble.data.UndoRedoManager
 import com.nirzor.voicebubble.data.VoiceHistoryEntity
 import com.nirzor.voicebubble.speech.BubbleState
